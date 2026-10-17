@@ -44,6 +44,7 @@ echo -e "${YELLOW}إعادة تحميل Nginx...${NC}"
 systemctl reload nginx
 
 SERVER_IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || hostname -I | awk '{print $1}')
+SITE_PORT=$(grep -oP 'listen\s+\K[0-9]+' /etc/nginx/sites-available/malaeb.conf 2>/dev/null | head -n1 || echo "8080")
 
 echo -e "\n${GREEN}✓ تم تحديث الموقع بنجاح!${NC}"
-echo -e "🔗 رابط موقعك المباشر: ${CYAN}http://${SERVER_IP}/${NC}\n"
+echo -e "🔗 رابط موقعك المباشر: ${CYAN}http://${SERVER_IP}:${SITE_PORT}/${NC}\n"
