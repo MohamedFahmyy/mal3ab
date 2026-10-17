@@ -1,0 +1,13 @@
+<?php
+/**
+ * Hostinger MySQL Database Configuration
+ * If you upload the client/dist contents to public_html on Hostinger,
+ * rename this file to config.php and enter your Hostinger MySQL details below:
+ */
+
+// Hostinger MySQL credentials (from hPanel -> Databases -> MySQL Databases):
+$dbHost = '127.0.0.1'; // On Hostinger, MySQL host is 127.0.0.1 or localhost
+$dbPort = '3306';
+$dbName = 'u754573027_malaeb';       // Your Hostinger Database Name
+$dbUser = 'u754573027_malaeb_user';  // Your Hostinger Database Username
+$dbPass = 'YourStrongPassword123!';  // Your Database User Password
