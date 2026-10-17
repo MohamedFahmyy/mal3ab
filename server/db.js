@@ -63,6 +63,11 @@ export async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+    // Ensure availableSlots exists for older tables
+    try {
+      await pool.query('ALTER TABLE `pitches` ADD COLUMN `availableSlots` JSON;');
+    } catch (_) {}
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS \`customers\` (
         \`id\` VARCHAR(50) PRIMARY KEY,
