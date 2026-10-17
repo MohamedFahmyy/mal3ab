@@ -1,5 +1,5 @@
-// API Client communicating with Express Backend API (/api)
-const API_BASE = '/api';
+// API Client communicating with Express Backend API
+const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 
 const safeFetch = async (url, options = {}) => {
   try {

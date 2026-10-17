@@ -1,9 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { initDatabase, getPool } from './db.js';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -1012,6 +1018,24 @@ app.post('/api/auth/login', (req, res) => {
 
   res.json({ success: true, message: 'تم تسجيل الدخول بنجاح', data: user });
 });
+
+// Serve frontend static assets in production if available
+const clientDist = path.join(__dirname, '../client/dist');
+const localPublic = path.join(__dirname, 'public');
+
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+} else if (fs.existsSync(localPublic)) {
+  app.use(express.static(localPublic));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(localPublic, 'index.html'));
+  });
+}
 
 // Initialize database and start server
 async function startServer() {
