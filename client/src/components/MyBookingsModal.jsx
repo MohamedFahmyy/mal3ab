@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Search, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Calendar, Search, Trash2, CheckCircle2, AlertCircle, Tag, DollarSign } from 'lucide-react';
 import { fetchUserBookings, cancelBooking } from '../utils/api';
 
 export default function MyBookingsModal({ onClose, user, showToast }) {
@@ -27,10 +27,10 @@ export default function MyBookingsModal({ onClose, user, showToast }) {
   };
 
   const handleCancel = async (bookingId) => {
-    if (!window.confirm('هل أنت تأكد من رغبتك في إلغاء هذا الحجز؟')) return;
+    if (!window.confirm('هل أنت متأكد من رغبتك في إلغاء هذا الحجز؟')) return;
     const res = await cancelBooking(bookingId);
     if (res.success) {
-      showToast('تم إلغاء الحجز بنجاح', 'success');
+      showToast('تم إلغاء الحجز بنجاح مع الحفاظ على سجل حسابك', 'success');
       loadBookings(phone);
     } else {
       showToast(res.message || 'حدث خطأ في إلغاء الحجز', 'error');
@@ -100,16 +100,32 @@ export default function MyBookingsModal({ onClose, user, showToast }) {
                     </div>
                   </div>
 
-                  <span style={{
-                    background: b.status === 'cancelled' ? '#fee2e2' : '#eaf7f0',
-                    color: b.status === 'cancelled' ? '#dc2626' : 'var(--primary)',
-                    padding: '4px 12px',
-                    borderRadius: '50px',
-                    fontSize: '12px',
-                    fontWeight: '800'
-                  }}>
-                    {b.status === 'cancelled' ? 'ملغي' : 'مؤكد ✓'}
-                  </span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {b.status === 'cancelled' ? (
+                      <span style={{ background: '#fee2e2', color: '#dc2626', padding: '4px 10px', borderRadius: '50px', fontSize: '11px', fontWeight: '800' }}>
+                        ملغي
+                      </span>
+                    ) : (
+                      <>
+                        <span style={{ background: '#eaf7f0', color: 'var(--primary)', padding: '4px 10px', borderRadius: '50px', fontSize: '11px', fontWeight: '800' }}>
+                          مؤكد ✓
+                        </span>
+                        {b.paymentStatus === 'paid' ? (
+                          <span style={{ background: '#dcfce7', color: '#15803d', padding: '4px 10px', borderRadius: '50px', fontSize: '11px', fontWeight: '800' }}>
+                            مدفوع بالكامل
+                          </span>
+                        ) : b.paymentStatus === 'partial' ? (
+                          <span style={{ background: '#fef3c7', color: '#b45309', padding: '4px 10px', borderRadius: '50px', fontSize: '11px', fontWeight: '800' }}>
+                            مدفوع جزئياً
+                          </span>
+                        ) : (
+                          <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '4px 10px', borderRadius: '50px', fontSize: '11px', fontWeight: '800' }}>
+                            غير مدفوع
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 <div style={{
@@ -119,15 +135,28 @@ export default function MyBookingsModal({ onClose, user, showToast }) {
                   background: '#f4f7f5',
                   padding: '10px 14px',
                   borderRadius: '10px',
-                  margin: '10px 0'
+                  margin: '10px 0',
+                  flexWrap: 'wrap'
                 }}>
                   <div>📅 التاريخ: <strong>{b.date}</strong></div>
                   <div>⏱️ الساعات: <strong>{(b.timeSlots || []).join(', ')}</strong></div>
+                  {b.discountAmount > 0 && (
+                    <div style={{ color: '#d97706', fontWeight: '700' }}>
+                      🏷️ خصم: {b.discountAmount} ج.م
+                    </div>
+                  )}
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontSize: '16px', fontWeight: '900', color: 'var(--dark)' }}>
-                    المبلغ: {b.totalAmount} ج.م <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>({b.paymentMethod === 'cash' ? 'كاش' : 'الكتروني'})</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <span style={{ fontSize: '15px', fontWeight: '900', color: 'var(--dark)' }}>
+                      الصافي: {b.netAmount || b.totalAmount} ج.م
+                    </span>
+                    {b.remainingAmount > 0 && (
+                      <span style={{ fontSize: '12px', fontWeight: '800', color: '#dc2626', marginRight: '10px' }}>
+                        (متبقي عليك: {b.remainingAmount} ج.م)
+                      </span>
+                    )}
                   </div>
 
                   {b.status !== 'cancelled' && (

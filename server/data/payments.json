@@ -1,0 +1,28 @@
+[
+  {
+    "id": "PAY-228647-1",
+    "bookingId": "MLB-228647",
+    "customerId": "cust-01000000000",
+    "customerName": "محمد",
+    "customerPhone": "01000000000",
+    "amount": 250,
+    "paymentMethod": "cash",
+    "type": "payment",
+    "notes": "دفعة أولى مسجلة مع إنشاء الحجز",
+    "createdBy": "إدارة المنصة",
+    "createdAt": "2026-10-17T02:16:12.240Z"
+  },
+  {
+    "id": "PAY-891234-1",
+    "bookingId": "MLB-891234",
+    "customerId": "cust-01011223344",
+    "customerName": "أحمد محمود",
+    "customerPhone": "01011223344",
+    "amount": 500,
+    "paymentMethod": "cash",
+    "type": "payment",
+    "notes": "سداد كامل الحجز نقداً",
+    "createdBy": "مدير النظام",
+    "createdAt": "2026-10-08T15:03:54.143Z"
+  }
+]
