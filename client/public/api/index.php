@@ -632,6 +632,87 @@ if ($path === '/api/pitches' && $method === 'POST') {
     exit;
 }
 
+// PUT /api/pitches/:id
+if (preg_match('#^/api/pitches/([^/]+)$#', $path, $m) && $method === 'PUT') {
+    $id = $m[1];
+    $stmt = $pdo->prepare("SELECT * FROM pitches WHERE id = ?");
+    $stmt->execute([$id]);
+    $current = $stmt->fetch();
+    if (!$current) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'الملعب غير موجود'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $name = $body['name'] ?? $current['name'];
+    $nameAr = $body['nameAr'] ?? $current['nameAr'] ?? $name;
+    $area = $body['area'] ?? $current['area'];
+    $city = $body['city'] ?? $current['city'];
+    $type = $body['type'] ?? $current['type'];
+    $pricePerHour = isset($body['pricePerHour']) ? (float)$body['pricePerHour'] : (float)$current['pricePerHour'];
+    $address = $body['address'] ?? $current['address'];
+    $surface = $body['surface'] ?? $current['surface'];
+    $ownerPhone = $body['ownerPhone'] ?? $current['ownerPhone'];
+    $image = $body['image'] ?? $current['image'];
+    $description = $body['description'] ?? $current['description'];
+
+    $facilities = isset($body['facilities']) 
+        ? (is_array($body['facilities']) ? json_encode($body['facilities'], JSON_UNESCAPED_UNICODE) : $body['facilities']) 
+        : $current['facilities'];
+
+    $availableSlots = isset($body['availableSlots']) 
+        ? (is_array($body['availableSlots']) ? json_encode($body['availableSlots'], JSON_UNESCAPED_UNICODE) : $body['availableSlots']) 
+        : $current['availableSlots'];
+
+    $upd = $pdo->prepare("UPDATE pitches SET 
+        name = ?, nameAr = ?, area = ?, city = ?, type = ?, pricePerHour = ?,
+        address = ?, surface = ?, ownerPhone = ?, image = ?, facilities = ?,
+        description = ?, availableSlots = ? WHERE id = ?");
+    $upd->execute([
+        $name, $nameAr, $area, $city, $type, $pricePerHour,
+        $address, $surface, $ownerPhone, $image, $facilities,
+        $description, $availableSlots, $id
+    ]);
+
+    // Update pitch name in bookings
+    $bUpd = $pdo->prepare("UPDATE bookings SET pitchName = ?, pitchArea = ? WHERE pitchId = ?");
+    $bUpd->execute([$nameAr, $area, $id]);
+
+    $stmt->execute([$id]);
+    $updated = decodePitch($stmt->fetch());
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم تعديل بيانات الملعب بنجاح! 🎉',
+        'data' => $updated
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// DELETE /api/pitches/:id
+if (preg_match('#^/api/pitches/([^/]+)$#', $path, $m) && $method === 'DELETE') {
+    $id = $m[1];
+    $stmt = $pdo->prepare("SELECT * FROM pitches WHERE id = ?");
+    $stmt->execute([$id]);
+    if (!$stmt->fetch()) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'الملعب غير موجود'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $delB = $pdo->prepare("DELETE FROM bookings WHERE pitchId = ?");
+    $delB->execute([$id]);
+
+    $delP = $pdo->prepare("DELETE FROM pitches WHERE id = ?");
+    $delP->execute([$id]);
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم حذف الملعب وجميع الحجوزات المرتبطة به بنجاح'
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // GET /api/bookings
 if ($path === '/api/bookings' && $method === 'GET') {
     $pitchId = $_GET['pitchId'] ?? null;

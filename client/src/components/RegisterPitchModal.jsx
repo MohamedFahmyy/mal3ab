@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, PlusCircle, Building2, MapPin, Phone } from 'lucide-react';
 import { registerPitch } from '../utils/api';
+import PitchHoursSelector from './PitchHoursSelector';
+import { getTimeFormat } from '../utils/timeFormat';
 
 export default function RegisterPitchModal({ onClose, onPitchRegistered }) {
   const [formData, setFormData] = useState({
@@ -12,7 +14,8 @@ export default function RegisterPitchModal({ onClose, onPitchRegistered }) {
     surface: 'نجيل صناعي تركيا معتمد',
     ownerPhone: '',
     image: 'https://images.unsplash.com/photo-1529900748604-07564a03e7a6?auto=format&fit=crop&w=1000&q=80',
-    facilities: ['إضاءة ليلية', 'غرف تغيير ملابس وشاور', 'كافيه ومشروبات']
+    facilities: ['إضاءة ليلية', 'غرف تغيير ملابس وشاور', 'كافيه ومشروبات'],
+    availableSlots: ['16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '00:00']
   });
 
   const [submitting, setSubmitting] = useState(false);
@@ -136,6 +139,14 @@ export default function RegisterPitchModal({ onClose, onPitchRegistered }) {
               placeholder="مثال: شارع النصر، بجوار النادي الأهلي"
               value={formData.address}
               onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+            />
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <PitchHoursSelector
+              selectedSlots={formData.availableSlots}
+              onChange={(slots) => setFormData({ ...formData, availableSlots: slots })}
+              timeFormat={getTimeFormat()}
             />
           </div>
 

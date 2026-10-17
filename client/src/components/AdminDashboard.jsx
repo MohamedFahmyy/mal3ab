@@ -3,20 +3,24 @@ import {
   Users, CalendarCheck, MapPin, LogOut, Search, Activity, Plus, Trash2, 
   Edit, Download, DollarSign, Eye, AlertCircle, CheckCircle, Tag
 } from 'lucide-react';
-import { fetchBookings, fetchPitches, cancelBooking } from '../utils/api';
+import { fetchBookings, fetchPitches, cancelBooking, deletePitch } from '../utils/api';
 import AdminQuickBooking from './AdminQuickBooking';
 import AdminFinancesTab from './AdminFinancesTab';
 import AdminCustomersTab from './AdminCustomersTab';
 import AdminAddPitchModal from './AdminAddPitchModal';
+import AdminEditPitchModal from './AdminEditPitchModal';
 import AdminBookingDetailModal from './AdminBookingDetailModal';
 import RecordPaymentModal from './RecordPaymentModal';
 import Toast from './Toast';
+import { getTimeFormat, setTimeFormat, formatSlotTime } from '../utils/timeFormat';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('quick'); // 'quick' | 'bookings' | 'customers' | 'pitches' | 'finances'
   const [toast, setToast] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const [showAddPitchModal, setShowAddPitchModal] = useState(false);
+  const [editingPitch, setEditingPitch] = useState(null);
+  const [timeFormat, setTimeFormatState] = useState(getTimeFormat());
 
   // Data states
   const [bookings, setBookings] = useState([]);
@@ -50,11 +54,28 @@ export default function AdminDashboard() {
       window.location.href = '/admin-login';
     }
     loadDashboardData();
+
+    const handleTimeFormatChange = (e) => {
+      setTimeFormatState(e.detail);
+    };
+    window.addEventListener('timeFormatChanged', handleTimeFormatChange);
+    return () => window.removeEventListener('timeFormatChanged', handleTimeFormatChange);
   }, [refresh]);
 
   const handleLogout = () => {
     localStorage.removeItem('malaeb_admin');
     window.location.href = '/admin-login';
+  };
+
+  const handleDeletePitch = async (id, name) => {
+    if (!window.confirm(`هل أنت متأكد من حذف ملعب "${name}" نهائياً؟\n⚠️ سيتم حذف هذا الملعب مع الحجوزات المرتبطة به.`)) return;
+    const res = await deletePitch(id);
+    if (res.success) {
+      showToast('تم حذف الملعب بنجاح');
+      loadDashboardData();
+    } else {
+      alert(res.message || 'تعذر حذف الملعب');
+    }
   };
 
   const handleCancelBooking = async (id) => {
@@ -257,8 +278,51 @@ export default function AdminDashboard() {
           </nav>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <a href="/" style={{ color: '#fff', textDecoration: 'none', fontSize: '14px', fontWeight: '600', opacity: 0.8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {/* 12h / 24h Time Format Switcher */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: 'rgba(255,255,255,0.08)',
+            borderRadius: '20px',
+            padding: '3px',
+            border: '1px solid rgba(255,255,255,0.15)'
+          }}>
+            <button
+              onClick={() => setTimeFormat('12h')}
+              style={{
+                background: timeFormat === '12h' ? 'var(--accent-lime)' : 'transparent',
+                color: timeFormat === '12h' ? '#000' : '#fff',
+                border: 'none',
+                padding: '4px 10px',
+                borderRadius: '16px',
+                fontSize: '11px',
+                fontWeight: '800',
+                cursor: 'pointer'
+              }}
+              title="عرض الساعات بنظام 12 ساعة (ص / م)"
+            >
+              12 ساعة
+            </button>
+            <button
+              onClick={() => setTimeFormat('24h')}
+              style={{
+                background: timeFormat === '24h' ? 'var(--accent-lime)' : 'transparent',
+                color: timeFormat === '24h' ? '#000' : '#fff',
+                border: 'none',
+                padding: '4px 10px',
+                borderRadius: '16px',
+                fontSize: '11px',
+                fontWeight: '800',
+                cursor: 'pointer'
+              }}
+              title="عرض الساعات بنظام 24 ساعة"
+            >
+              24 ساعة
+            </button>
+          </div>
+
+          <a href="/" style={{ color: '#fff', textDecoration: 'none', fontSize: '13px', fontWeight: '700', opacity: 0.9 }}>
             زيارة الموقع
           </a>
           <button 
@@ -504,23 +568,81 @@ export default function AdminDashboard() {
                     <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>المنطقة</th>
                     <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>النوع</th>
                     <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>السعر/ساعة</th>
+                    <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>ساعات العمل</th>
                     <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>هاتف الملعب</th>
+                    <th style={{ padding: '14px', color: 'var(--text-muted)', fontWeight: '700', fontSize: '14px' }}>الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pitches.map((p, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '14px', fontWeight: '800' }}>{p.nameAr || p.name}</td>
-                      <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{p.area} - {p.city}</td>
-                      <td style={{ padding: '14px' }}>
-                        <span style={{ background: '#f0f5f2', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>
-                          {p.type}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px', fontWeight: '800', color: 'var(--primary)' }}>{p.pricePerHour} ج.م</td>
-                      <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{p.ownerPhone}</td>
-                    </tr>
-                  ))}
+                  {pitches.map((p, i) => {
+                    const slotsCount = Array.isArray(p.availableSlots) ? p.availableSlots.length : 0;
+                    const slotsSummary = slotsCount > 0 
+                      ? `${slotsCount} ساعة (${formatSlotTime(p.availableSlots[0], timeFormat)} - ${formatSlotTime(p.availableSlots[slotsCount - 1], timeFormat)})`
+                      : '24 ساعة (افتراضي)';
+
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '14px', fontWeight: '800' }}>{p.nameAr || p.name}</td>
+                        <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{p.area} - {p.city}</td>
+                        <td style={{ padding: '14px' }}>
+                          <span style={{ background: '#f0f5f2', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>
+                            {p.type}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px', fontWeight: '800', color: 'var(--primary)' }}>{p.pricePerHour} ج.م</td>
+                        <td style={{ padding: '14px', fontSize: '13px', fontWeight: '700', color: '#0f766e' }}>
+                          <span style={{ background: '#f0fdfa', border: '1px solid #ccfbf1', padding: '3px 8px', borderRadius: '6px' }}>
+                            ⏰ {slotsSummary}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{p.ownerPhone}</td>
+                        <td style={{ padding: '14px' }}>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              onClick={() => setEditingPitch(p)}
+                              title="تعديل بيانات وساعات الملعب"
+                              style={{
+                                background: '#f0fdf4',
+                                border: '1px solid #bbf7d0',
+                                color: '#16a34a',
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontSize: '12px',
+                                fontWeight: '800'
+                              }}
+                            >
+                              <Edit size={14} />
+                              تعديل
+                            </button>
+                            <button
+                              onClick={() => handleDeletePitch(p.id, p.nameAr || p.name)}
+                              title="حذف الملعب نهائياً"
+                              style={{
+                                background: '#fef2f2',
+                                border: '1px solid #fecaca',
+                                color: '#dc2626',
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontSize: '12px',
+                                fontWeight: '800'
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              حذف
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -534,7 +656,20 @@ export default function AdminDashboard() {
           onClose={() => setShowAddPitchModal(false)}
           onSuccess={(newPitch) => {
             setShowAddPitchModal(false);
-            showToast('تم إضافة الملعب بنجاح');
+            showToast('تم إضافة الملعب بنجاح! 🎉');
+            loadDashboardData();
+          }}
+        />
+      )}
+
+      {/* Edit Pitch Modal */}
+      {editingPitch && (
+        <AdminEditPitchModal
+          pitch={editingPitch}
+          onClose={() => setEditingPitch(null)}
+          onSuccess={(updatedPitch) => {
+            setEditingPitch(null);
+            showToast('تم تعديل بيانات الملعب وساعات العمل بنجاح! 🎉');
             loadDashboardData();
           }}
         />

@@ -1,5 +1,6 @@
-import React from 'react';
-import { Calendar, User, PlusCircle, Search, Menu, X, LogOut } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, User, PlusCircle, Search, Menu, X, LogOut, Clock } from 'lucide-react';
+import { getTimeFormat, setTimeFormat } from '../utils/timeFormat';
 
 export default function Navbar({
   user,
@@ -10,7 +11,14 @@ export default function Navbar({
   onScrollToPitches,
   onScrollToHow
 }) {
-  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [timeFormat, setTimeFormatState] = useState(getTimeFormat());
+
+  useEffect(() => {
+    const handleFormatChange = (e) => setTimeFormatState(e.detail);
+    window.addEventListener('timeFormatChanged', handleFormatChange);
+    return () => window.removeEventListener('timeFormatChanged', handleFormatChange);
+  }, []);
 
   return (
     <header style={{
@@ -77,7 +85,52 @@ export default function Navbar({
 
         {/* User Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div className="desktop-actions" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div className="desktop-actions" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* 12h / 24h Time Switcher */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: '#f1f5f2',
+              borderRadius: '20px',
+              padding: '2px',
+              border: '1px solid #dce4de'
+            }}>
+              <button
+                type="button"
+                onClick={() => setTimeFormat('12h')}
+                style={{
+                  background: timeFormat === '12h' ? 'var(--primary)' : 'transparent',
+                  color: timeFormat === '12h' ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '3px 8px',
+                  borderRadius: '14px',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  cursor: 'pointer'
+                }}
+                title="عرض المواعيد بنظام 12 ساعة (ص / م)"
+              >
+                12 س
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimeFormat('24h')}
+                style={{
+                  background: timeFormat === '24h' ? 'var(--primary)' : 'transparent',
+                  color: timeFormat === '24h' ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '3px 8px',
+                  borderRadius: '14px',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  cursor: 'pointer'
+                }}
+                title="عرض المواعيد بنظام 24 ساعة"
+              >
+                24 س
+              </button>
+            </div>
+
             <button
               className="btn btn-light"
               onClick={onOpenMyBookings}

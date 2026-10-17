@@ -54,6 +54,19 @@ export async function registerPitch(pitchData) {
   });
 }
 
+export async function updatePitch(id, pitchData) {
+  return await safeFetch(`${API_BASE}/pitches/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(pitchData)
+  });
+}
+
+export async function deletePitch(id) {
+  return await safeFetch(`${API_BASE}/pitches/${id}`, {
+    method: 'DELETE'
+  });
+}
+
 // --- BOOKINGS ---
 export async function fetchBookings(filters = {}) {
   const params = new URLSearchParams();

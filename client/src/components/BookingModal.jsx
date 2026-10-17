@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, CheckCircle, ShieldCheck, CreditCard, DollarSign, Smartphone, Tag } from 'lucide-react';
 import { createBooking } from '../utils/api';
+import { formatSlotTime } from '../utils/timeFormat';
 
 export default function BookingModal({ bookingData, onClose, onBookingSuccess }) {
   const { pitch, date, timeSlots, totalPrice } = bookingData || {};
@@ -145,7 +146,7 @@ export default function BookingModal({ bookingData, onClose, onBookingSuccess })
                 fontWeight: '800',
                 color: 'var(--primary)'
               }}>
-                ⏰ {t}
+                ⏰ {formatSlotTime(t)}
               </span>
             ))}
           </div>

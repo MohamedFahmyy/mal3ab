@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { fetchPitches, fetchBookings, createBooking } from '../utils/api';
-import { Calendar as CalendarIcon, Tag, DollarSign, Smartphone, CreditCard, User, Phone, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Calendar as CalendarIcon, Tag, DollarSign, Smartphone, CreditCard, User, Phone, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import AdminBookingDetailModal from './AdminBookingDetailModal';
+import { formatSlotTime, getTimeFormat, setTimeFormat } from '../utils/timeFormat';
 
 export default function AdminQuickBooking({ showToast }) {
   const [pitches, setPitches] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [timeFormat, setTimeFormatState] = useState(getTimeFormat());
 
   const [baseDate, setBaseDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -62,6 +64,10 @@ export default function AdminQuickBooking({ showToast }) {
     }
     setDates(nextDays);
     setSelectedDate(baseDate);
+
+    const handleFormatChange = (e) => setTimeFormatState(e.detail);
+    window.addEventListener('timeFormatChanged', handleFormatChange);
+    return () => window.removeEventListener('timeFormatChanged', handleFormatChange);
   }, [baseDate]);
 
   useEffect(() => {
@@ -179,7 +185,50 @@ export default function AdminQuickBooking({ showToast }) {
           <CalendarIcon size={20} color="#10b981" />
           جدول المواعيد والحجز السريع
         </h3>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* 12h / 24h Switcher */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: '#222',
+            borderRadius: '16px',
+            padding: '3px',
+            border: '1px solid #333'
+          }}>
+            <button
+              type="button"
+              onClick={() => setTimeFormat('12h')}
+              style={{
+                background: timeFormat === '12h' ? '#10b981' : 'transparent',
+                color: timeFormat === '12h' ? '#000' : '#888',
+                border: 'none',
+                padding: '4px 10px',
+                borderRadius: '12px',
+                fontSize: '11px',
+                fontWeight: '800',
+                cursor: 'pointer'
+              }}
+            >
+              12 ساعة
+            </button>
+            <button
+              type="button"
+              onClick={() => setTimeFormat('24h')}
+              style={{
+                background: timeFormat === '24h' ? '#10b981' : 'transparent',
+                color: timeFormat === '24h' ? '#000' : '#888',
+                border: 'none',
+                padding: '4px 10px',
+                borderRadius: '12px',
+                fontSize: '11px',
+                fontWeight: '800',
+                cursor: 'pointer'
+              }}
+            >
+              24 ساعة
+            </button>
+          </div>
+
           <input 
             type="date" 
             value={baseDate}
@@ -329,7 +378,7 @@ export default function AdminQuickBooking({ showToast }) {
                       >
                         {/* Time */}
                         <div style={{ fontSize: '13px', fontWeight: '800', color: '#fff' }}>
-                          {time}
+                          {formatSlotTime(time, timeFormat)}
                         </div>
 
                         {/* Customer Name below slot box */}
@@ -401,7 +450,7 @@ export default function AdminQuickBooking({ showToast }) {
                         gap: '4px'
                       }}
                     >
-                      <span>{time}</span>
+                      <span>{formatSlotTime(time, timeFormat)}</span>
                       <span style={{ fontSize: '11px', opacity: 0.8 }}>
                         {selected ? 'محدد ✓' : 'متاح'}
                       </span>

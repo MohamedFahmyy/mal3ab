@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { X, MapPin, Star, Clock, Calendar, CheckCircle2, Shield, PhoneCall } from 'lucide-react';
 import { fetchPitchDetails } from '../utils/api';
+import { formatSlotTime, getTimeFormat, setTimeFormat } from '../utils/timeFormat';
 
 export default function PitchDetailModal({ pitch, onClose, onProceedToBooking }) {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [slotsStatus, setSlotsStatus] = useState([]);
   const [selectedSlots, setSelectedSlots] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [timeFormat, setTimeFormatState] = useState(getTimeFormat());
+
+  useEffect(() => {
+    const handleFormatChange = (e) => setTimeFormatState(e.detail);
+    window.addEventListener('timeFormatChanged', handleFormatChange);
+    return () => window.removeEventListener('timeFormatChanged', handleFormatChange);
+  }, []);
 
   useEffect(() => {
     if (!pitch) return;
@@ -140,22 +148,66 @@ export default function PitchDetailModal({ pitch, onClose, onProceedToBooking })
               gap: '12px',
               marginBottom: '14px'
             }}>
-              <h4 style={{ fontSize: '16px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h4 style={{ fontSize: '16px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
                 <Clock size={18} color="var(--primary)" />
                 <span>حدد تاريخ وساعات اللعب:</span>
               </h4>
 
-              <input
-                type="date"
-                className="form-input"
-                style={{ width: 'auto', padding: '6px 12px', fontSize: '13px' }}
-                min={new Date().toISOString().split('T')[0]}
-                value={selectedDate}
-                onChange={(e) => {
-                  setSelectedDate(e.target.value);
-                  setSelectedSlots([]);
-                }}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: '#f1f5f2',
+                  borderRadius: '16px',
+                  padding: '2px',
+                  border: '1px solid #dce4de'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setTimeFormat('12h')}
+                    style={{
+                      background: timeFormat === '12h' ? 'var(--primary)' : 'transparent',
+                      color: timeFormat === '12h' ? '#fff' : 'var(--text-muted)',
+                      border: 'none',
+                      padding: '3px 8px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    12 س
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTimeFormat('24h')}
+                    style={{
+                      background: timeFormat === '24h' ? 'var(--primary)' : 'transparent',
+                      color: timeFormat === '24h' ? '#fff' : 'var(--text-muted)',
+                      border: 'none',
+                      padding: '3px 8px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    24 س
+                  </button>
+                </div>
+
+                <input
+                  type="date"
+                  className="form-input"
+                  style={{ width: 'auto', padding: '6px 12px', fontSize: '13px' }}
+                  min={new Date().toISOString().split('T')[0]}
+                  value={selectedDate}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    setSelectedSlots([]);
+                  }}
+                />
+              </div>
             </div>
 
             {loading ? (
@@ -189,7 +241,7 @@ export default function PitchDetailModal({ pitch, onClose, onProceedToBooking })
                         transition: 'var(--transition)'
                       }}
                     >
-                      <div>{slot.time}</div>
+                      <div>{formatSlotTime(slot.time, timeFormat)}</div>
                       <div style={{ fontSize: '10px', fontWeight: '600', opacity: 0.8 }}>
                         {!slot.isAvailable ? 'محجوز' : isSelected ? 'محدد ✓' : 'متاح'}
                       </div>

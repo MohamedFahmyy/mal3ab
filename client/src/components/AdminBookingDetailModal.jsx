@@ -3,6 +3,7 @@ import { X, Calendar, Clock, MapPin, User, Phone, DollarSign, Printer, PlusCircl
 import { fetchBookingDetails, cancelBooking } from '../utils/api';
 import RecordPaymentModal from './RecordPaymentModal';
 import ReceiptModal from './ReceiptModal';
+import { formatSlotTime } from '../utils/timeFormat';
 
 export default function AdminBookingDetailModal({ bookingId, onClose, onUpdated }) {
   const [booking, setBooking] = useState(null);
@@ -118,7 +119,7 @@ export default function AdminBookingDetailModal({ bookingId, onClose, onUpdated 
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {booking.timeSlots?.map(t => (
                     <span key={t} style={{ background: 'var(--primary-light)', color: 'var(--primary)', padding: '4px 10px', borderRadius: '6px', fontWeight: '800', fontSize: '12px' }}>
-                      ⏰ {t}
+                      ⏰ {formatSlotTime(t)}
                     </span>
                   ))}
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)', alignSelf: 'center', marginRight: '6px' }}>

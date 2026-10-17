@@ -218,6 +218,105 @@ app.post('/api/pitches', async (req, res) => {
   }
 });
 
+// Update Pitch
+app.put('/api/pitches/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+    const { 
+      name, nameAr, area, city, type, pricePerHour, 
+      address, surface, ownerPhone, image, facilities, 
+      description, availableSlots 
+    } = req.body;
+
+    const [existingRows] = await pool.query('SELECT * FROM `pitches` WHERE `id` = ?', [id]);
+    if (existingRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الملعب غير موجود' });
+    }
+
+    const current = existingRows[0];
+    const updated = {
+      name: name ?? current.name,
+      nameAr: nameAr ?? current.nameAr ?? name ?? current.name,
+      area: area ?? current.area,
+      city: city ?? current.city,
+      type: type ?? current.type,
+      pricePerHour: pricePerHour !== undefined ? Number(pricePerHour) : Number(current.pricePerHour),
+      address: address ?? current.address,
+      surface: surface ?? current.surface,
+      ownerPhone: ownerPhone ?? current.ownerPhone,
+      image: image ?? current.image,
+      facilities: facilities ? (Array.isArray(facilities) ? JSON.stringify(facilities) : facilities) : current.facilities,
+      description: description ?? current.description,
+      availableSlots: availableSlots ? (Array.isArray(availableSlots) ? JSON.stringify(availableSlots) : availableSlots) : current.availableSlots
+    };
+
+    await pool.query(
+      `UPDATE \`pitches\` SET 
+        \`name\` = ?, \`nameAr\` = ?, \`area\` = ?, \`city\` = ?, \`type\` = ?,
+        \`pricePerHour\` = ?, \`address\` = ?, \`surface\` = ?, \`ownerPhone\` = ?,
+        \`image\` = ?, \`facilities\` = ?, \`description\` = ?, \`availableSlots\` = ?
+       WHERE \`id\` = ?;`,
+      [
+        updated.name, updated.nameAr, updated.area, updated.city, updated.type,
+        updated.pricePerHour, updated.address, updated.surface, updated.ownerPhone,
+        updated.image, updated.facilities, updated.description, updated.availableSlots,
+        id
+      ]
+    );
+
+    // Update pitch name in bookings table if changed
+    if (updated.nameAr || updated.name) {
+      await pool.query('UPDATE `bookings` SET `pitchName` = ?, `pitchArea` = ? WHERE `pitchId` = ?', [
+        updated.nameAr || updated.name,
+        updated.area,
+        id
+      ]);
+    }
+
+    const [updatedRows] = await pool.query('SELECT * FROM `pitches` WHERE `id` = ?', [id]);
+    const finalPitch = updatedRows[0];
+    finalPitch.facilities = parseJsonField(finalPitch.facilities, []);
+    finalPitch.availableSlots = parseJsonField(finalPitch.availableSlots, []);
+    finalPitch.pricePerHour = Number(finalPitch.pricePerHour);
+    finalPitch.rating = Number(finalPitch.rating);
+
+    res.json({
+      success: true,
+      message: 'تم تعديل بيانات الملعب بنجاح! 🎉',
+      data: finalPitch
+    });
+  } catch (err) {
+    console.error('Error updating pitch:', err);
+    res.status(500).json({ success: false, message: 'خطأ في تعديل الملعب' });
+  }
+});
+
+// Delete Pitch
+app.delete('/api/pitches/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+
+    const [existingRows] = await pool.query('SELECT * FROM `pitches` WHERE `id` = ?', [id]);
+    if (existingRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الملعب غير موجود' });
+    }
+
+    // Delete associated payments and bookings
+    await pool.query('DELETE FROM `bookings` WHERE `pitchId` = ?', [id]);
+    await pool.query('DELETE FROM `pitches` WHERE `id` = ?', [id]);
+
+    res.json({
+      success: true,
+      message: 'تم حذف الملعب وجميع الحجوزات المرتبطة به بنجاح'
+    });
+  } catch (err) {
+    console.error('Error deleting pitch:', err);
+    res.status(500).json({ success: false, message: 'خطأ في حذف الملعب' });
+  }
+});
+
 // --- BOOKINGS ---
 app.get('/api/bookings', async (req, res) => {
   try {
