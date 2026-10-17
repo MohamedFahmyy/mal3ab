@@ -11,6 +11,17 @@ const safeFetch = async (url, options = {}) => {
       ...options
     });
     const json = await res.json();
+    if (Array.isArray(json)) {
+      return { success: true, count: json.length, data: json };
+    }
+    if (json && typeof json === 'object') {
+      if (!('success' in json)) {
+        if (json.error || json.status === 'error') {
+          return { success: false, message: json.error || json.message || 'خطأ في معالجة الطلب', ...json };
+        }
+        return { success: true, data: json };
+      }
+    }
     return json;
   } catch (err) {
     console.error('API Error at ' + url + ':', err);
