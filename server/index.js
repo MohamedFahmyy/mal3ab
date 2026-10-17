@@ -1,11 +1,9 @@
 import express from 'express';
 import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import { initDatabase, getPool } from './db.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -13,47 +11,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const DATA_DIR = path.join(__dirname, 'data');
-const PITCHES_FILE = path.join(DATA_DIR, 'pitches.json');
-const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
-const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers.json');
-const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
-
-// --- Helper Functions for File Persistence ---
-const readJsonFile = (filePath, defaultVal = []) => {
-  try {
-    if (!fs.existsSync(filePath)) return defaultVal;
-    const content = fs.readFileSync(filePath, 'utf8');
-    return content ? JSON.parse(content) : defaultVal;
-  } catch (err) {
-    console.error(`Error reading ${filePath}:`, err);
-    return defaultVal;
-  }
-};
-
-const writeJsonFile = (filePath, data) => {
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-    return true;
-  } catch (err) {
-    console.error(`Error writing ${filePath}:`, err);
-    return false;
-  }
-};
-
-const getPitches = () => readJsonFile(PITCHES_FILE, []);
-const savePitches = (data) => writeJsonFile(PITCHES_FILE, data);
-
-const getBookings = () => readJsonFile(BOOKINGS_FILE, []);
-const saveBookings = (data) => writeJsonFile(BOOKINGS_FILE, data);
-
-const getCustomers = () => readJsonFile(CUSTOMERS_FILE, []);
-const saveCustomers = (data) => writeJsonFile(CUSTOMERS_FILE, data);
-
-const getPayments = () => readJsonFile(PAYMENTS_FILE, []);
-const savePayments = (data) => writeJsonFile(PAYMENTS_FILE, data);
-
-// Normalizes phone numbers (e.g. +201011223344 -> 01011223344)
+// Normalize phone numbers
 export const normalizePhone = (phone) => {
   if (!phone) return '';
   let cleaned = String(phone).replace(/[^\d]/g, '');
@@ -63,827 +21,978 @@ export const normalizePhone = (phone) => {
   return cleaned.trim();
 };
 
-// Recalculates booking finances based on discounts and payment history
-export const enrichBooking = (b, allPayments = null) => {
-  const payments = allPayments !== null ? allPayments : getPayments();
-  const totalAmount = Number(b.totalAmount || b.totalPrice || 0);
-  const discountType = b.discountType || 'none';
-  const discountValue = Math.max(0, Number(b.discountValue || 0));
-  
-  let discountAmount = 0;
-  if (discountType === 'percentage') {
-    const clampedPct = Math.min(100, discountValue);
-    discountAmount = Math.round((totalAmount * clampedPct) / 100);
-  } else if (discountType === 'fixed') {
-    discountAmount = Math.min(totalAmount, discountValue);
-  } else if (b.discountAmount !== undefined) {
-    discountAmount = Number(b.discountAmount);
+const parseJsonField = (val, defaultVal = []) => {
+  if (!val) return defaultVal;
+  if (typeof val === 'object') return val;
+  try {
+    return JSON.parse(val);
+  } catch {
+    return defaultVal;
   }
-
-  const netAmount = Math.max(0, totalAmount - discountAmount);
-
-  // Compute paid amount from payments ledger
-  const bookingPayments = payments.filter(p => p.bookingId === b.id && p.status !== 'reversed');
-  let paidAmount = 0;
-  if (bookingPayments.length > 0) {
-    paidAmount = bookingPayments.reduce((sum, p) => {
-      const amt = Number(p.amount || 0);
-      return sum + (p.type === 'refund' ? -amt : amt);
-    }, 0);
-  } else if (b.paidAmount !== undefined) {
-    paidAmount = Number(b.paidAmount);
-  } else {
-    paidAmount = b.paymentStatus === 'unpaid' ? 0 : netAmount;
-  }
-  paidAmount = Math.max(0, paidAmount);
-  const remainingAmount = Math.max(0, netAmount - paidAmount);
-
-  let paymentStatus = 'unpaid';
-  if (netAmount === 0 && paidAmount === 0) {
-    paymentStatus = 'paid';
-  } else if (paidAmount >= netAmount && netAmount > 0) {
-    paymentStatus = 'paid';
-  } else if (paidAmount > 0 && paidAmount < netAmount) {
-    paymentStatus = 'partial';
-  } else {
-    paymentStatus = 'unpaid';
-  }
-
-  return {
-    ...b,
-    totalAmount,
-    discountType,
-    discountValue,
-    discountAmount,
-    netAmount,
-    paidAmount,
-    remainingAmount,
-    paymentStatus,
-    customerName: b.customerName || 'عميل غير مسجل',
-    customerPhone: b.customerPhone || ''
-  };
 };
 
-// Find or create customer
-const findOrCreateCustomer = (name, phone) => {
-  const normPhone = normalizePhone(phone);
-  if (!normPhone) return null;
-
-  const customers = getCustomers();
-  let customer = customers.find(c => normalizePhone(c.phone) === normPhone);
-
-  if (!customer) {
-    customer = {
-      id: 'cust-' + normPhone,
-      name: name && name.trim() ? name.trim() : 'عميل ' + normPhone.slice(-4),
-      phone: normPhone,
-      notes: 'تم التسجيل تلقائياً مع أول حجز',
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    customers.push(customer);
-    saveCustomers(customers);
-  } else if (name && name.trim() && (customer.name.startsWith('عميل ') || customer.name === 'حجز إداري')) {
-    customer.name = name.trim();
-    customer.updatedAt = new Date().toISOString();
-    saveCustomers(customers);
-  }
-
-  return customer;
-};
-
-// Compute customer metrics from bookings and payments
-const getCustomerMetrics = (customer, allBookings, allPayments) => {
-  const normPhone = normalizePhone(customer.phone);
-  const customerBookings = allBookings.filter(b => {
-    return (b.customerId && b.customerId === customer.id) || 
-           (b.customerPhone && normalizePhone(b.customerPhone) === normPhone);
-  });
-
-  const validBookings = customerBookings.filter(b => b.status !== 'cancelled' && b.status !== 'ملغي');
-  const enrichedBookings = validBookings.map(b => enrichBooking(b, allPayments));
-
-  const totalBookings = enrichedBookings.length;
-  const totalGross = enrichedBookings.reduce((sum, b) => sum + b.totalAmount, 0);
-  const totalDiscount = enrichedBookings.reduce((sum, b) => sum + b.discountAmount, 0);
-  const totalNet = enrichedBookings.reduce((sum, b) => sum + b.netAmount, 0);
-  const totalPaid = enrichedBookings.reduce((sum, b) => sum + b.paidAmount, 0);
-  const remainingBalance = Math.max(0, totalNet - totalPaid);
-
-  const dates = validBookings.map(b => b.date).filter(Boolean).sort().reverse();
-  const lastBooking = dates.length > 0 ? dates[0] : null;
-
-  return {
-    ...customer,
-    totalBookings,
-    totalGross,
-    totalDiscount,
-    totalNet,
-    totalPaid,
-    remainingBalance,
-    lastBooking
-  };
-};
-
-// ======================== API ROUTES ========================
+// --- API ROUTES ---
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'Malaeb Full API', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  try {
+    const pool = getPool();
+    await pool.query('SELECT 1;');
+    res.json({
+      status: 'ok',
+      service: 'Malaeb MySQL API',
+      database: 'connected (MySQL)',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', database: err.message });
+  }
 });
 
 // --- PITCHES ---
-app.get('/api/pitches', (req, res) => {
-  const { area, type, search, maxPrice, sortBy } = req.query;
-  let pitches = getPitches();
+app.get('/api/pitches', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { area, type, search, maxPrice, sortBy } = req.query;
 
-  if (area && area !== 'الكل' && area !== 'all') {
-    pitches = pitches.filter(p => p.area === area || p.city === area);
-  }
+    let query = 'SELECT * FROM `pitches` WHERE 1=1';
+    const params = [];
 
-  if (type && type !== 'الكل' && type !== 'all') {
-    pitches = pitches.filter(p => p.type === type);
-  }
-
-  if (search) {
-    const q = search.trim().toLowerCase();
-    pitches = pitches.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      (p.nameAr && p.nameAr.toLowerCase().includes(q)) ||
-      (p.area && p.area.toLowerCase().includes(q)) ||
-      (p.city && p.city.toLowerCase().includes(q))
-    );
-  }
-
-  if (maxPrice) {
-    pitches = pitches.filter(p => p.pricePerHour <= Number(maxPrice));
-  }
-
-  if (sortBy === 'price-asc') {
-    pitches.sort((a, b) => a.pricePerHour - b.pricePerHour);
-  } else if (sortBy === 'price-desc') {
-    pitches.sort((a, b) => b.pricePerHour - a.pricePerHour);
-  } else if (sortBy === 'rating') {
-    pitches.sort((a, b) => b.rating - a.rating);
-  }
-
-  res.json({ success: true, count: pitches.length, data: pitches });
-});
-
-app.get('/api/pitches/:id', (req, res) => {
-  const { id } = req.params;
-  const { date } = req.query;
-  const pitches = getPitches();
-  const pitch = pitches.find(p => p.id === id);
-
-  if (!pitch) {
-    return res.status(404).json({ success: false, message: 'الملعب غير موجود' });
-  }
-
-  const bookings = getBookings();
-  const targetDate = date || new Date().toISOString().split('T')[0];
-  const dayBookings = bookings.filter(b => b.pitchId === id && b.date === targetDate && b.status !== 'cancelled' && b.status !== 'ملغي');
-  const bookedTimeSlots = dayBookings.flatMap(b => b.timeSlots || []);
-
-  const defaultSlots = ['16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '00:00'];
-  const availableSlotsList = pitch.availableSlots && pitch.availableSlots.length > 0 ? pitch.availableSlots : defaultSlots;
-
-  const slotsStatus = availableSlotsList.map(time => {
-    const activeBooking = dayBookings.find(b => b.timeSlots && b.timeSlots.includes(time));
-    return {
-      time,
-      isAvailable: !activeBooking,
-      booking: activeBooking ? {
-        id: activeBooking.id,
-        customerName: activeBooking.customerName || 'عميل غير مسجل',
-        paymentStatus: activeBooking.paymentStatus || 'unpaid',
-        discountAmount: activeBooking.discountAmount || 0
-      } : null
-    };
-  });
-
-  res.json({
-    success: true,
-    data: {
-      ...pitch,
-      selectedDate: targetDate,
-      slots: slotsStatus
+    if (area && area !== 'الكل' && area !== 'all') {
+      query += ' AND (`area` = ? OR `city` = ?)';
+      params.push(area, area);
     }
-  });
+
+    if (type && type !== 'الكل' && type !== 'all') {
+      query += ' AND `type` = ?';
+      params.push(type);
+    }
+
+    if (search) {
+      query += ' AND (`name` LIKE ? OR `nameAr` LIKE ? OR `area` LIKE ? OR `city` LIKE ?)';
+      const s = `%${search.trim()}%`;
+      params.push(s, s, s, s);
+    }
+
+    if (maxPrice) {
+      query += ' AND `pricePerHour` <= ?';
+      params.push(Number(maxPrice));
+    }
+
+    if (sortBy === 'price-asc') {
+      query += ' ORDER BY `pricePerHour` ASC';
+    } else if (sortBy === 'price-desc') {
+      query += ' ORDER BY `pricePerHour` DESC';
+    } else if (sortBy === 'rating') {
+      query += ' ORDER BY `rating` DESC';
+    } else {
+      query += ' ORDER BY `createdAt` DESC';
+    }
+
+    const [rows] = await pool.query(query, params);
+
+    const formatted = rows.map(r => ({
+      ...r,
+      pricePerHour: Number(r.pricePerHour),
+      rating: Number(r.rating),
+      facilities: parseJsonField(r.facilities, []),
+      availableSlots: parseJsonField(r.availableSlots, [])
+    }));
+
+    res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('Error fetching pitches:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب بيانات الملاعب' });
+  }
 });
 
-app.post('/api/pitches', (req, res) => {
-  const { name, nameAr, area, city, type, pricePerHour, address, surface, ownerPhone, image, facilities } = req.body;
+app.get('/api/pitches/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+    const { date } = req.query;
 
-  if (!name || !area || !type || !pricePerHour || !ownerPhone) {
-    return res.status(400).json({ success: false, message: 'يرجى إكمال البيانات الأساسية للملعب' });
+    const [pitchRows] = await pool.query('SELECT * FROM `pitches` WHERE `id` = ?', [id]);
+    if (pitchRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الملعب غير موجود' });
+    }
+
+    const pitch = pitchRows[0];
+    pitch.facilities = parseJsonField(pitch.facilities, []);
+    pitch.availableSlots = parseJsonField(pitch.availableSlots, []);
+    pitch.pricePerHour = Number(pitch.pricePerHour);
+
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const [bookings] = await pool.query(
+      `SELECT id, customerName, timeSlots, paymentStatus, discountAmount 
+       FROM \`bookings\` 
+       WHERE \`pitchId\` = ? AND \`date\` = ? AND \`status\` NOT IN ('cancelled', 'ملغي');`,
+      [id, targetDate]
+    );
+
+    const defaultSlots = ['16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '00:00'];
+    const availableSlotsList = pitch.availableSlots.length > 0 ? pitch.availableSlots : defaultSlots;
+
+    const parsedBookings = bookings.map(b => ({
+      ...b,
+      timeSlots: parseJsonField(b.timeSlots, [])
+    }));
+
+    const slotsStatus = availableSlotsList.map(time => {
+      const activeBooking = parsedBookings.find(b => b.timeSlots.includes(time));
+      return {
+        time,
+        isAvailable: !activeBooking,
+        booking: activeBooking ? {
+          id: activeBooking.id,
+          customerName: activeBooking.customerName || 'عميل غير مسجل',
+          paymentStatus: activeBooking.paymentStatus || 'unpaid',
+          discountAmount: Number(activeBooking.discountAmount || 0)
+        } : null
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...pitch,
+        selectedDate: targetDate,
+        slots: slotsStatus
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching pitch details:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب تفاصيل الملعب' });
   }
+});
 
-  const pitches = getPitches();
-  const newPitch = {
-    id: 'pitch-' + Date.now(),
-    name,
-    nameAr: nameAr || name,
-    area,
-    city: city || area,
-    type,
-    pricePerHour: Number(pricePerHour),
-    rating: 5.0,
-    reviewsCount: 1,
-    image: image || 'https://images.unsplash.com/photo-1529900748604-07564a03e7a6?auto=format&fit=crop&w=1000&q=80',
-    address: address || 'عنوان الملعب',
-    surface: surface || 'نجيل صناعي ممتاز',
-    facilities: facilities || ['إضاءة ليلية', 'غرف تغيير ملابس'],
-    description: 'ملعب مميز مضاف جديداً عبر المنصة.',
-    ownerPhone,
-    availableSlots: ['16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '00:00']
-  };
+app.post('/api/pitches', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { name, nameAr, area, city, type, pricePerHour, address, surface, ownerPhone, image, facilities } = req.body;
 
-  pitches.unshift(newPitch);
-  savePitches(pitches);
+    if (!name || !area || !type || !pricePerHour || !ownerPhone) {
+      return res.status(400).json({ success: false, message: 'يرجى إكمال البيانات الأساسية للملعب' });
+    }
 
-  res.status(201).json({ success: true, message: 'تم إضافة الملعب بنجاح! 🎉', data: newPitch });
+    const newPitch = {
+      id: 'pitch-' + Date.now(),
+      name,
+      nameAr: nameAr || name,
+      area,
+      city: city || area,
+      type,
+      pricePerHour: Number(pricePerHour),
+      rating: 5.0,
+      reviewsCount: 1,
+      image: image || 'https://images.unsplash.com/photo-1529900748604-07564a03e7a6?auto=format&fit=crop&w=1000&q=80',
+      address: address || 'عنوان الملعب',
+      surface: surface || 'نجيل صناعي ممتاز',
+      facilities: facilities || ['إضاءة ليلية', 'غرف تغيير ملابس'],
+      description: 'ملعب مميز مضاف جديداً عبر المنصة.',
+      ownerPhone,
+      availableSlots: ['16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '00:00']
+    };
+
+    await pool.query(
+      `INSERT INTO \`pitches\` (id, name, nameAr, area, city, type, pricePerHour, rating, reviewsCount, image, address, surface, facilities, description, ownerPhone, availableSlots)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        newPitch.id, newPitch.name, newPitch.nameAr, newPitch.area, newPitch.city,
+        newPitch.type, newPitch.pricePerHour, newPitch.rating, newPitch.reviewsCount,
+        newPitch.image, newPitch.address, newPitch.surface, JSON.stringify(newPitch.facilities),
+        newPitch.description, newPitch.ownerPhone, JSON.stringify(newPitch.availableSlots)
+      ]
+    );
+
+    res.status(201).json({ success: true, message: 'تم إضافة الملعب بنجاح! 🎉', data: newPitch });
+  } catch (err) {
+    console.error('Error creating pitch:', err);
+    res.status(500).json({ success: false, message: 'خطأ في إضافة الملعب' });
+  }
 });
 
 // --- BOOKINGS ---
-app.get('/api/bookings', (req, res) => {
-  const { phone, customerId, pitchId, date, paymentStatus } = req.query;
-  const bookings = getBookings();
-  const payments = getPayments();
+app.get('/api/bookings', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { phone, customerId, pitchId, date, paymentStatus } = req.query;
 
-  let enriched = bookings.map(b => enrichBooking(b, payments));
+    let query = 'SELECT * FROM `bookings` WHERE 1=1';
+    const params = [];
 
-  if (phone) {
-    const norm = normalizePhone(phone);
-    enriched = enriched.filter(b => normalizePhone(b.customerPhone) === norm);
+    if (phone) {
+      query += ' AND `customerPhone` = ?';
+      params.push(normalizePhone(phone));
+    }
+
+    if (customerId) {
+      query += ' AND `customerId` = ?';
+      params.push(customerId);
+    }
+
+    if (pitchId && pitchId !== 'all') {
+      query += ' AND `pitchId` = ?';
+      params.push(pitchId);
+    }
+
+    if (date) {
+      query += ' AND `date` = ?';
+      params.push(date);
+    }
+
+    if (paymentStatus && paymentStatus !== 'all') {
+      query += ' AND `paymentStatus` = ?';
+      params.push(paymentStatus);
+    }
+
+    query += ' ORDER BY `createdAt` DESC';
+
+    const [rows] = await pool.query(query, params);
+
+    const formatted = rows.map(r => ({
+      ...r,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+      timeSlots: parseJsonField(r.timeSlots, []),
+      hours: Number(r.hours),
+      pricePerHour: Number(r.pricePerHour),
+      totalAmount: Number(r.totalAmount),
+      discountValue: Number(r.discountValue),
+      discountAmount: Number(r.discountAmount),
+      netAmount: Number(r.netAmount),
+      paidAmount: Number(r.paidAmount),
+      remainingAmount: Number(r.remainingAmount)
+    }));
+
+    res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('Error fetching bookings:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب الحجوزات' });
   }
-
-  if (customerId) {
-    enriched = enriched.filter(b => b.customerId === customerId);
-  }
-
-  if (pitchId && pitchId !== 'all') {
-    enriched = enriched.filter(b => b.pitchId === pitchId);
-  }
-
-  if (date) {
-    enriched = enriched.filter(b => b.date === date);
-  }
-
-  if (paymentStatus && paymentStatus !== 'all') {
-    enriched = enriched.filter(b => b.paymentStatus === paymentStatus);
-  }
-
-  res.json({ success: true, count: enriched.length, data: enriched });
 });
 
-app.get('/api/bookings/:id', (req, res) => {
-  const { id } = req.params;
-  const bookings = getBookings();
-  const payments = getPayments();
-  const booking = bookings.find(b => b.id === id);
+app.get('/api/bookings/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
 
-  if (!booking) {
-    return res.status(404).json({ success: false, message: 'الحجز غير موجود' });
-  }
-
-  const enriched = enrichBooking(booking, payments);
-  const bookingPayments = payments.filter(p => p.bookingId === id);
-
-  res.json({
-    success: true,
-    data: {
-      ...enriched,
-      payments: bookingPayments
+    const [bookingRows] = await pool.query('SELECT * FROM `bookings` WHERE `id` = ?', [id]);
+    if (bookingRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الحجز غير موجود' });
     }
-  });
-});
 
-app.post('/api/bookings', (req, res) => {
-  const { 
-    pitchId, 
-    customerName, 
-    customerPhone, 
-    date, 
-    timeSlots, 
-    paymentMethod, 
-    paidAmount = 0,
-    discountType = 'none',
-    discountValue = 0,
-    discountNotes = '',
-    notes = ''
-  } = req.body;
+    const booking = bookingRows[0];
+    booking.date = booking.date ? new Date(booking.date).toISOString().split('T')[0] : '';
+    booking.timeSlots = parseJsonField(booking.timeSlots, []);
+    booking.hours = Number(booking.hours);
+    booking.pricePerHour = Number(booking.pricePerHour);
+    booking.totalAmount = Number(booking.totalAmount);
+    booking.discountValue = Number(booking.discountValue);
+    booking.discountAmount = Number(booking.discountAmount);
+    booking.netAmount = Number(booking.netAmount);
+    booking.paidAmount = Number(booking.paidAmount);
+    booking.remainingAmount = Number(booking.remainingAmount);
 
-  if (!pitchId || !customerName || !customerPhone || !date || !timeSlots || timeSlots.length === 0) {
-    return res.status(400).json({ success: false, message: 'بيانات الحجز غير مكتملة' });
-  }
+    const [payments] = await pool.query(
+      'SELECT * FROM `payments` WHERE `bookingId` = ? ORDER BY `createdAt` DESC',
+      [id]
+    );
 
-  const pitches = getPitches();
-  const pitch = pitches.find(p => p.id === pitchId);
-  if (!pitch) {
-    return res.status(404).json({ success: false, message: 'الملعب المحدد غير موجود' });
-  }
+    const formattedPayments = payments.map(p => ({
+      ...p,
+      amount: Number(p.amount)
+    }));
 
-  // Prevent time collisions with active bookings
-  const bookings = getBookings();
-  const collision = bookings.find(b =>
-    b.pitchId === pitchId &&
-    b.date === date &&
-    b.status !== 'cancelled' &&
-    b.status !== 'ملغي' &&
-    b.timeSlots.some(t => timeSlots.includes(t))
-  );
-
-  if (collision) {
-    return res.status(409).json({ success: false, message: 'عذراً، هذا الموعد تم حجزه بالفعل! يرجى اختيار ميعاد آخر.' });
-  }
-
-  // Calculate gross total safely on backend
-  const hours = timeSlots.length;
-  const pricePerHour = Number(pitch.pricePerHour);
-  const totalAmount = pricePerHour * hours;
-
-  // Validate and compute discount
-  const numDiscountVal = Math.max(0, Number(discountValue || 0));
-  let discountAmount = 0;
-  if (discountType === 'percentage') {
-    if (numDiscountVal > 100) {
-      return res.status(400).json({ success: false, message: 'لا يمكن أن تتجاوز نسبة الخصم 100%' });
-    }
-    discountAmount = Math.round((totalAmount * numDiscountVal) / 100);
-  } else if (discountType === 'fixed') {
-    if (numDiscountVal > totalAmount) {
-      return res.status(400).json({ success: false, message: 'قيمة الخصم لا يمكن أن تتجاوز إجمالي الحجز قبل الخصم' });
-    }
-    discountAmount = numDiscountVal;
-  }
-
-  const netAmount = Math.max(0, totalAmount - discountAmount);
-
-  // Validate initial payment
-  const initialPaid = Math.max(0, Number(paidAmount || 0));
-  if (initialPaid > netAmount) {
-    return res.status(400).json({ 
-      success: false, 
-      message: `المبلغ المدفوع (${initialPaid} ج.م) لا يمكن أن يتجاوز صافي قيمة الحجز (${netAmount} ج.م)` 
+    res.json({
+      success: true,
+      data: {
+        ...booking,
+        payments: formattedPayments
+      }
     });
+  } catch (err) {
+    console.error('Error fetching booking details:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب تفاصيل الحجز' });
   }
+});
 
-  const remainingAmount = Math.max(0, netAmount - initialPaid);
-  let paymentStatus = 'unpaid';
-  if (netAmount === 0 || initialPaid >= netAmount) {
-    paymentStatus = 'paid';
-  } else if (initialPaid > 0 && initialPaid < netAmount) {
-    paymentStatus = 'partial';
-  }
+app.post('/api/bookings', async (req, res) => {
+  try {
+    const pool = getPool();
+    const {
+      pitchId,
+      customerName,
+      customerPhone,
+      date,
+      timeSlots,
+      paymentMethod,
+      paidAmount = 0,
+      discountType = 'none',
+      discountValue = 0,
+      discountNotes = '',
+      notes = ''
+    } = req.body;
 
-  // Link or create Customer
-  const customer = findOrCreateCustomer(customerName, customerPhone);
-  const customerId = customer ? customer.id : ('cust-' + normalizePhone(customerPhone));
+    if (!pitchId || !customerName || !customerPhone || !date || !timeSlots || timeSlots.length === 0) {
+      return res.status(400).json({ success: false, message: 'بيانات الحجز غير مكتملة' });
+    }
 
-  const bookingRef = 'MLB-' + Math.floor(100000 + Math.random() * 900000);
-  const createdAt = new Date().toISOString();
+    const [pitchRows] = await pool.query('SELECT * FROM `pitches` WHERE `id` = ?', [pitchId]);
+    if (pitchRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الملعب المحدد غير موجود' });
+    }
+    const pitch = pitchRows[0];
 
-  const newBooking = {
-    id: bookingRef,
-    pitchId,
-    pitchName: pitch.nameAr || pitch.name,
-    pitchArea: pitch.area,
-    customerId,
-    customerName: customerName.trim(),
-    customerPhone: normalizePhone(customerPhone),
-    date,
-    timeSlots,
-    hours,
-    pricePerHour,
-    totalAmount,
-    discountType,
-    discountValue: numDiscountVal,
-    discountAmount,
-    discountNotes: discountNotes || '',
-    netAmount,
-    paidAmount: initialPaid,
-    remainingAmount,
-    paymentStatus,
-    paymentMethod: paymentMethod || 'cash',
-    notes: notes || '',
-    status: 'confirmed',
-    createdAt
-  };
+    // Check collision against active bookings
+    const [existingBookings] = await pool.query(
+      `SELECT id, timeSlots FROM \`bookings\` 
+       WHERE \`pitchId\` = ? AND \`date\` = ? AND \`status\` NOT IN ('cancelled', 'ملغي');`,
+      [pitchId, date]
+    );
 
-  bookings.unshift(newBooking);
-  saveBookings(bookings);
+    const hasCollision = existingBookings.some(b => {
+      const bookedSlots = parseJsonField(b.timeSlots, []);
+      return bookedSlots.some(t => timeSlots.includes(t));
+    });
 
-  // If an initial payment is registered, record it in payments ledger
-  if (initialPaid > 0) {
-    const payments = getPayments();
-    const paymentRef = 'PAY-' + bookingRef.replace('MLB-', '') + '-1';
-    const paymentRecord = {
-      id: paymentRef,
-      bookingId: bookingRef,
+    if (hasCollision) {
+      return res.status(409).json({ success: false, message: 'عذراً، هذا الموعد تم حجزه بالفعل! يرجى اختيار ميعاد آخر.' });
+    }
+
+    // Server-side calculations
+    const hours = timeSlots.length;
+    const pricePerHour = Number(pitch.pricePerHour);
+    const totalAmount = pricePerHour * hours;
+
+    const numDiscountVal = Math.max(0, Number(discountValue || 0));
+    let discountAmount = 0;
+    if (discountType === 'percentage') {
+      if (numDiscountVal > 100) {
+        return res.status(400).json({ success: false, message: 'لا يمكن أن تتجاوز نسبة الخصم 100%' });
+      }
+      discountAmount = Math.round((totalAmount * numDiscountVal) / 100);
+    } else if (discountType === 'fixed') {
+      if (numDiscountVal > totalAmount) {
+        return res.status(400).json({ success: false, message: 'قيمة الخصم لا يمكن أن تتجاوز إجمالي الحجز قبل الخصم' });
+      }
+      discountAmount = numDiscountVal;
+    }
+
+    const netAmount = Math.max(0, totalAmount - discountAmount);
+
+    const initialPaid = Math.max(0, Number(paidAmount || 0));
+    if (initialPaid > netAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `المبلغ المدفوع (${initialPaid} ج.م) لا يمكن أن يتجاوز صافي قيمة الحجز (${netAmount} ج.م)`
+      });
+    }
+
+    const remainingAmount = Math.max(0, netAmount - initialPaid);
+    let paymentStatus = 'unpaid';
+    if (netAmount === 0 || initialPaid >= netAmount) {
+      paymentStatus = 'paid';
+    } else if (initialPaid > 0 && initialPaid < netAmount) {
+      paymentStatus = 'partial';
+    }
+
+    // Find or create customer
+    const normPhone = normalizePhone(customerPhone);
+    const [custRows] = await pool.query('SELECT * FROM `customers` WHERE `phone` = ?', [normPhone]);
+    let customerId;
+
+    if (custRows.length === 0) {
+      customerId = 'cust-' + normPhone;
+      await pool.query(
+        `INSERT INTO \`customers\` (id, name, phone, notes, status, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, 'active', NOW(), NOW())`,
+        [customerId, customerName.trim(), normPhone, 'تم التسجيل تلقائياً مع أول حجز']
+      );
+    } else {
+      customerId = custRows[0].id;
+      if (customerName && customerName.trim() && (custRows[0].name.startsWith('عميل ') || custRows[0].name === 'حجز إداري')) {
+        await pool.query('UPDATE `customers` SET `name` = ?, `updatedAt` = NOW() WHERE `id` = ?', [customerName.trim(), customerId]);
+      }
+    }
+
+    const bookingRef = 'MLB-' + Math.floor(100000 + Math.random() * 900000);
+
+    await pool.query(
+      `INSERT INTO \`bookings\` 
+       (id, pitchId, pitchName, pitchArea, customerId, customerName, customerPhone, date, timeSlots, hours, pricePerHour, totalAmount, discountType, discountValue, discountAmount, discountNotes, netAmount, paidAmount, remainingAmount, paymentStatus, paymentMethod, notes, status, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', NOW());`,
+      [
+        bookingRef, pitchId, pitch.nameAr || pitch.name, pitch.area, customerId,
+        customerName.trim(), normPhone, date, JSON.stringify(timeSlots),
+        hours, pricePerHour, totalAmount, discountType, numDiscountVal, discountAmount,
+        discountNotes || '', netAmount, initialPaid, remainingAmount, paymentStatus,
+        paymentMethod || 'cash', notes || ''
+      ]
+    );
+
+    // If initial payment exists, record in payments table
+    if (initialPaid > 0) {
+      const paymentRef = 'PAY-' + bookingRef.replace('MLB-', '') + '-1';
+      await pool.query(
+        `INSERT INTO \`payments\` 
+         (id, bookingId, customerId, customerName, customerPhone, amount, paymentMethod, type, notes, createdBy, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'payment', 'دفعة أولى مسجلة مع إنشاء الحجز', 'إدارة المنصة', NOW());`,
+        [paymentRef, bookingRef, customerId, customerName.trim(), normPhone, initialPaid, paymentMethod || 'cash']
+      );
+    }
+
+    const newBooking = {
+      id: bookingRef,
+      pitchId,
+      pitchName: pitch.nameAr || pitch.name,
+      pitchArea: pitch.area,
       customerId,
       customerName: customerName.trim(),
-      customerPhone: normalizePhone(customerPhone),
-      amount: initialPaid,
+      customerPhone: normPhone,
+      date,
+      timeSlots,
+      hours,
+      pricePerHour,
+      totalAmount,
+      discountType,
+      discountValue: numDiscountVal,
+      discountAmount,
+      discountNotes: discountNotes || '',
+      netAmount,
+      paidAmount: initialPaid,
+      remainingAmount,
+      paymentStatus,
       paymentMethod: paymentMethod || 'cash',
-      type: 'payment',
-      notes: 'دفعة أولى مسجلة مع إنشاء الحجز',
-      createdBy: 'إدارة المنصة',
-      createdAt
+      status: 'confirmed',
+      createdAt: new Date().toISOString()
     };
-    payments.unshift(paymentRecord);
-    savePayments(payments);
-  }
 
-  res.status(201).json({
-    success: true,
-    message: 'تم تأكيد الحجز بنجاح! ⚽🎉',
-    data: newBooking
-  });
+    res.status(201).json({
+      success: true,
+      message: 'تم تأكيد الحجز بنجاح! ⚽🎉',
+      data: newBooking
+    });
+  } catch (err) {
+    console.error('Error creating booking:', err);
+    res.status(500).json({ success: false, message: 'خطأ في إنشاء الحجز' });
+  }
 });
 
-app.delete('/api/bookings/:id', (req, res) => {
-  const { id } = req.params;
-  const bookings = getBookings();
-  const idx = bookings.findIndex(b => b.id === id);
+app.delete('/api/bookings/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
 
-  if (idx === -1) {
-    return res.status(404).json({ success: false, message: 'الحجز غير موجود' });
+    const [rows] = await pool.query('SELECT * FROM `bookings` WHERE `id` = ?', [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الحجز غير موجود' });
+    }
+
+    await pool.query('UPDATE `bookings` SET `status` = ? WHERE `id` = ?', ['cancelled', id]);
+
+    res.json({
+      success: true,
+      message: 'تم إلغاء الحجز بنجاح مع الحفاظ على سجل العميل والمدفوعات',
+      data: { ...rows[0], status: 'cancelled' }
+    });
+  } catch (err) {
+    console.error('Error cancelling booking:', err);
+    res.status(500).json({ success: false, message: 'خطأ في إلغاء الحجز' });
   }
-
-  bookings[idx].status = 'cancelled';
-  saveBookings(bookings);
-  
-  res.json({ 
-    success: true, 
-    message: 'تم إلغاء الحجز بنجاح مع الحفاظ على سجل العميل والمدفوعات', 
-    data: bookings[idx] 
-  });
 });
 
 // --- CUSTOMERS CRM ---
-app.get('/api/customers', (req, res) => {
-  const { search, sortBy, status } = req.query;
-  const customers = getCustomers();
-  const bookings = getBookings();
-  const payments = getPayments();
+app.get('/api/customers', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { search, sortBy, status } = req.query;
 
-  let metricsList = customers.map(c => getCustomerMetrics(c, bookings, payments));
+    let query = `
+      SELECT c.*, 
+             COUNT(DISTINCT CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.id END) AS totalBookings,
+             COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.totalAmount ELSE 0 END), 0) AS totalGross,
+             COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.discountAmount ELSE 0 END), 0) AS totalDiscount,
+             COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.netAmount ELSE 0 END), 0) AS totalNet,
+             COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.paidAmount ELSE 0 END), 0) AS totalPaid,
+             COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.remainingAmount ELSE 0 END), 0) AS remainingBalance,
+             MAX(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN DATE_FORMAT(b.date, '%Y-%m-%d') END) AS lastBooking
+      FROM \`customers\` c
+      LEFT JOIN \`bookings\` b ON (b.customerId = c.id OR b.customerPhone = c.phone)
+      WHERE 1=1
+    `;
+    const params = [];
 
-  if (status && status !== 'all') {
-    metricsList = metricsList.filter(c => c.status === status);
+    if (status && status !== 'all') {
+      query += ' AND c.status = ?';
+      params.push(status);
+    }
+
+    if (search) {
+      query += ' AND (c.name LIKE ? OR c.phone LIKE ?)';
+      const s = `%${search.trim()}%`;
+      params.push(s, s);
+    }
+
+    query += ' GROUP BY c.id';
+
+    if (sortBy === 'name') {
+      query += ' ORDER BY c.name ASC';
+    } else if (sortBy === 'bookings') {
+      query += ' ORDER BY totalBookings DESC';
+    } else if (sortBy === 'balance') {
+      query += ' ORDER BY remainingBalance DESC';
+    } else if (sortBy === 'paid') {
+      query += ' ORDER BY totalPaid DESC';
+    } else {
+      query += ' ORDER BY c.createdAt DESC';
+    }
+
+    const [rows] = await pool.query(query, params);
+
+    const formatted = rows.map(r => ({
+      ...r,
+      totalBookings: Number(r.totalBookings || 0),
+      totalGross: Number(r.totalGross || 0),
+      totalDiscount: Number(r.totalDiscount || 0),
+      totalNet: Number(r.totalNet || 0),
+      totalPaid: Number(r.totalPaid || 0),
+      remainingBalance: Number(r.remainingBalance || 0)
+    }));
+
+    res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('Error fetching customers:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب بيانات العملاء' });
   }
+});
 
-  if (search) {
-    const q = search.trim().toLowerCase();
-    metricsList = metricsList.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.phone.includes(q)
+app.get('/api/customers/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+
+    const [custRows] = await pool.query(
+      `SELECT c.*, 
+              COUNT(DISTINCT CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.id END) AS totalBookings,
+              COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.totalAmount ELSE 0 END), 0) AS totalGross,
+              COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.discountAmount ELSE 0 END), 0) AS totalDiscount,
+              COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.netAmount ELSE 0 END), 0) AS totalNet,
+              COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.paidAmount ELSE 0 END), 0) AS totalPaid,
+              COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN b.remainingAmount ELSE 0 END), 0) AS remainingBalance,
+              MAX(CASE WHEN b.status NOT IN ('cancelled', 'ملغي') THEN DATE_FORMAT(b.date, '%Y-%m-%d') END) AS lastBooking
+       FROM \`customers\` c
+       LEFT JOIN \`bookings\` b ON (b.customerId = c.id OR b.customerPhone = c.phone)
+       WHERE c.id = ? OR c.phone = ?
+       GROUP BY c.id;`,
+      [id, id]
     );
-  }
 
-  if (sortBy === 'name') {
-    metricsList.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
-  } else if (sortBy === 'bookings') {
-    metricsList.sort((a, b) => b.totalBookings - a.totalBookings);
-  } else if (sortBy === 'balance') {
-    metricsList.sort((a, b) => b.remainingBalance - a.remainingBalance);
-  } else if (sortBy === 'paid') {
-    metricsList.sort((a, b) => b.totalPaid - a.totalPaid);
-  } else {
-    // Default: newest registration first
-    metricsList.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  }
-
-  res.json({ success: true, count: metricsList.length, data: metricsList });
-});
-
-app.get('/api/customers/:id', (req, res) => {
-  const { id } = req.params;
-  const customers = getCustomers();
-  const bookings = getBookings();
-  const payments = getPayments();
-
-  const customer = customers.find(c => c.id === id || normalizePhone(c.phone) === normalizePhone(id));
-  if (!customer) {
-    return res.status(404).json({ success: false, message: 'العميل غير موجود' });
-  }
-
-  const metrics = getCustomerMetrics(customer, bookings, payments);
-  const normPhone = normalizePhone(customer.phone);
-
-  const customerBookings = bookings
-    .filter(b => b.customerId === customer.id || normalizePhone(b.customerPhone) === normPhone)
-    .map(b => enrichBooking(b, payments));
-
-  const customerPayments = payments.filter(p => 
-    p.customerId === customer.id || 
-    normalizePhone(p.customerPhone) === normPhone ||
-    customerBookings.some(cb => cb.id === p.bookingId)
-  );
-
-  res.json({
-    success: true,
-    data: {
-      ...metrics,
-      bookings: customerBookings,
-      payments: customerPayments
+    if (custRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'العميل غير موجود' });
     }
-  });
-});
 
-app.post('/api/customers', (req, res) => {
-  const { name, phone, notes, status } = req.body;
+    const customer = custRows[0];
+    customer.totalBookings = Number(customer.totalBookings || 0);
+    customer.totalGross = Number(customer.totalGross || 0);
+    customer.totalDiscount = Number(customer.totalDiscount || 0);
+    customer.totalNet = Number(customer.totalNet || 0);
+    customer.totalPaid = Number(customer.totalPaid || 0);
+    customer.remainingBalance = Number(customer.remainingBalance || 0);
 
-  if (!name || !phone) {
-    return res.status(400).json({ success: false, message: 'الاسم ورقم الهاتف مطلوبان' });
-  }
+    const [bookings] = await pool.query(
+      `SELECT * FROM \`bookings\` 
+       WHERE \`customerId\` = ? OR \`customerPhone\` = ? 
+       ORDER BY \`createdAt\` DESC;`,
+      [customer.id, customer.phone]
+    );
 
-  const normPhone = normalizePhone(phone);
-  if (normPhone.length < 10) {
-    return res.status(400).json({ success: false, message: 'يرجى إدخال رقم هاتف صحيح يتكون من 11 رقم' });
-  }
+    const formattedBookings = bookings.map(b => ({
+      ...b,
+      date: b.date ? new Date(b.date).toISOString().split('T')[0] : '',
+      timeSlots: parseJsonField(b.timeSlots, []),
+      hours: Number(b.hours),
+      pricePerHour: Number(b.pricePerHour),
+      totalAmount: Number(b.totalAmount),
+      discountValue: Number(b.discountValue),
+      discountAmount: Number(b.discountAmount),
+      netAmount: Number(b.netAmount),
+      paidAmount: Number(b.paidAmount),
+      remainingAmount: Number(b.remainingAmount)
+    }));
 
-  const customers = getCustomers();
-  if (customers.some(c => normalizePhone(c.phone) === normPhone)) {
-    return res.status(409).json({ success: false, message: 'يوجد عميل مسجل بالفعل برقم الهاتف هذا' });
-  }
+    const [payments] = await pool.query(
+      `SELECT * FROM \`payments\` 
+       WHERE \`customerId\` = ? OR \`customerPhone\` = ? 
+       ORDER BY \`createdAt\` DESC;`,
+      [customer.id, customer.phone]
+    );
 
-  const newCustomer = {
-    id: 'cust-' + normPhone,
-    name: name.trim(),
-    phone: normPhone,
-    notes: notes || '',
-    status: status || 'active',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+    const formattedPayments = payments.map(p => ({
+      ...p,
+      amount: Number(p.amount)
+    }));
 
-  customers.unshift(newCustomer);
-  saveCustomers(customers);
-
-  res.status(201).json({ success: true, message: 'تم إضافة العميل بنجاح', data: newCustomer });
-});
-
-app.put('/api/customers/:id', (req, res) => {
-  const { id } = req.params;
-  const { name, phone, notes, status } = req.body;
-
-  const customers = getCustomers();
-  const idx = customers.findIndex(c => c.id === id);
-
-  if (idx === -1) {
-    return res.status(404).json({ success: false, message: 'العميل غير موجود' });
-  }
-
-  const oldPhone = customers[idx].phone;
-  let newNormPhone = oldPhone;
-
-  if (phone) {
-    newNormPhone = normalizePhone(phone);
-    if (newNormPhone !== oldPhone && customers.some(c => c.id !== id && normalizePhone(c.phone) === newNormPhone)) {
-      return res.status(409).json({ success: false, message: 'رقم الهاتف الجديد مستخدم بالفعل لعميل آخر' });
-    }
-  }
-
-  customers[idx] = {
-    ...customers[idx],
-    name: name ? name.trim() : customers[idx].name,
-    phone: newNormPhone,
-    notes: notes !== undefined ? notes : customers[idx].notes,
-    status: status || customers[idx].status,
-    updatedAt: new Date().toISOString()
-  };
-
-  saveCustomers(customers);
-
-  // If phone or name changed, update linked bookings and payments for consistency
-  if (newNormPhone !== oldPhone || (name && name.trim() !== customers[idx].name)) {
-    const bookings = getBookings();
-    let updatedBookings = false;
-    bookings.forEach(b => {
-      if (b.customerId === id || normalizePhone(b.customerPhone) === oldPhone) {
-        b.customerId = id;
-        b.customerPhone = newNormPhone;
-        if (name) b.customerName = name.trim();
-        updatedBookings = true;
+    res.json({
+      success: true,
+      data: {
+        ...customer,
+        bookings: formattedBookings,
+        payments: formattedPayments
       }
     });
-    if (updatedBookings) saveBookings(bookings);
-
-    const payments = getPayments();
-    let updatedPayments = false;
-    payments.forEach(p => {
-      if (p.customerId === id || normalizePhone(p.customerPhone) === oldPhone) {
-        p.customerId = id;
-        p.customerPhone = newNormPhone;
-        if (name) p.customerName = name.trim();
-        updatedPayments = true;
-      }
-    });
-    if (updatedPayments) savePayments(payments);
+  } catch (err) {
+    console.error('Error fetching customer details:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب ملف العميل' });
   }
-
-  res.json({ success: true, message: 'تم تحديث بيانات العميل بنجاح', data: customers[idx] });
 });
 
-app.delete('/api/customers/:id', (req, res) => {
-  const { id } = req.params;
-  const customers = getCustomers();
-  const idx = customers.findIndex(c => c.id === id);
+app.post('/api/customers', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { name, phone, notes, status } = req.body;
 
-  if (idx === -1) {
-    return res.status(404).json({ success: false, message: 'العميل غير موجود' });
+    if (!name || !phone) {
+      return res.status(400).json({ success: false, message: 'الاسم ورقم الهاتف مطلوبان' });
+    }
+
+    const normPhone = normalizePhone(phone);
+    if (normPhone.length < 10) {
+      return res.status(400).json({ success: false, message: 'يرجى إدخال رقم هاتف صحيح يتكون من 11 رقم' });
+    }
+
+    const [existing] = await pool.query('SELECT id FROM `customers` WHERE `phone` = ?', [normPhone]);
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, message: 'يوجد عميل مسجل بالفعل برقم الهاتف هذا' });
+    }
+
+    const newCustomer = {
+      id: 'cust-' + normPhone,
+      name: name.trim(),
+      phone: normPhone,
+      notes: notes || '',
+      status: status || 'active'
+    };
+
+    await pool.query(
+      `INSERT INTO \`customers\` (id, name, phone, notes, status, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, NOW(), NOW());`,
+      [newCustomer.id, newCustomer.name, newCustomer.phone, newCustomer.notes, newCustomer.status]
+    );
+
+    res.status(201).json({ success: true, message: 'تم إضافة العميل بنجاح', data: newCustomer });
+  } catch (err) {
+    console.error('Error creating customer:', err);
+    res.status(500).json({ success: false, message: 'خطأ في إضافة العميل' });
   }
+});
 
-  const customer = customers[idx];
-  const bookings = getBookings();
-  const payments = getPayments();
-  const normPhone = normalizePhone(customer.phone);
+app.put('/api/customers/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+    const { name, phone, notes, status } = req.body;
 
-  const customerBookings = bookings.filter(b => 
-    (b.customerId === id || normalizePhone(b.customerPhone) === normPhone) && 
-    b.status !== 'cancelled' && 
-    b.status !== 'ملغي'
-  );
+    const [existing] = await pool.query('SELECT * FROM `customers` WHERE `id` = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: 'العميل غير موجود' });
+    }
 
-  const customerPayments = payments.filter(p => 
-    p.customerId === id || 
-    normalizePhone(p.customerPhone) === normPhone
-  );
+    const oldPhone = existing[0].phone;
+    let newNormPhone = oldPhone;
 
-  if (customerBookings.length > 0 || customerPayments.length > 0) {
-    return res.status(400).json({
-      success: false,
-      message: `لا يمكن حذف العميل (${customer.name}) لوجود ${customerBookings.length} حجز نشط و ${customerPayments.length} حركة دفع مسجلة. يمكنك إلغاء تفعيل العميل بدلاً من ذلك.`
+    if (phone) {
+      newNormPhone = normalizePhone(phone);
+      if (newNormPhone !== oldPhone) {
+        const [conflict] = await pool.query('SELECT id FROM `customers` WHERE `phone` = ? AND `id` != ?', [newNormPhone, id]);
+        if (conflict.length > 0) {
+          return res.status(409).json({ success: false, message: 'رقم الهاتف الجديد مستخدم بالفعل لعميل آخر' });
+        }
+      }
+    }
+
+    const updatedName = name ? name.trim() : existing[0].name;
+    const updatedNotes = notes !== undefined ? notes : existing[0].notes;
+    const updatedStatus = status || existing[0].status;
+
+    await pool.query(
+      `UPDATE \`customers\` 
+       SET \`name\` = ?, \`phone\` = ?, \`notes\` = ?, \`status\` = ?, \`updatedAt\` = NOW() 
+       WHERE \`id\` = ?;`,
+      [updatedName, newNormPhone, updatedNotes, updatedStatus, id]
+    );
+
+    // Keep linked bookings and payments updated
+    if (newNormPhone !== oldPhone || updatedName !== existing[0].name) {
+      await pool.query(
+        'UPDATE `bookings` SET `customerPhone` = ?, `customerName` = ? WHERE `customerId` = ? OR `customerPhone` = ?;',
+        [newNormPhone, updatedName, id, oldPhone]
+      );
+      await pool.query(
+        'UPDATE `payments` SET `customerPhone` = ?, `customerName` = ? WHERE `customerId` = ? OR `customerPhone` = ?;',
+        [newNormPhone, updatedName, id, oldPhone]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'تم تحديث بيانات العميل بنجاح',
+      data: { id, name: updatedName, phone: newNormPhone, notes: updatedNotes, status: updatedStatus }
     });
+  } catch (err) {
+    console.error('Error updating customer:', err);
+    res.status(500).json({ success: false, message: 'خطأ في تحديث العميل' });
   }
+});
 
-  customers.splice(idx, 1);
-  saveCustomers(customers);
+app.delete('/api/customers/:id', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
 
-  res.json({ success: true, message: 'تم حذف العميل بنجاح' });
+    const [custRows] = await pool.query('SELECT * FROM `customers` WHERE `id` = ?', [id]);
+    if (custRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'العميل غير موجود' });
+    }
+
+    const customer = custRows[0];
+    const [[{ activeBookingsCount }]] = await pool.query(
+      `SELECT COUNT(*) AS activeBookingsCount FROM \`bookings\` 
+       WHERE (\`customerId\` = ? OR \`customerPhone\` = ?) AND \`status\` NOT IN ('cancelled', 'ملغي');`,
+      [id, customer.phone]
+    );
+
+    const [[{ paymentsCount }]] = await pool.query(
+      `SELECT COUNT(*) AS paymentsCount FROM \`payments\` 
+       WHERE \`customerId\` = ? OR \`customerPhone\` = ?;`,
+      [id, customer.phone]
+    );
+
+    if (activeBookingsCount > 0 || paymentsCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `لا يمكن حذف العميل (${customer.name}) لوجود ${activeBookingsCount} حجز نشط و ${paymentsCount} حركة دفع مسجلة. يمكنك إلغاء تفعيل العميل بدلاً من ذلك.`
+      });
+    }
+
+    await pool.query('DELETE FROM `customers` WHERE `id` = ?;', [id]);
+
+    res.json({ success: true, message: 'تم حذف العميل بنجاح' });
+  } catch (err) {
+    console.error('Error deleting customer:', err);
+    res.status(500).json({ success: false, message: 'خطأ في حذف العميل' });
+  }
 });
 
 // --- PAYMENTS & PARTIAL PAYMENTS ---
-app.get('/api/payments', (req, res) => {
-  const { bookingId, customerId, phone } = req.query;
-  let payments = getPayments();
+app.get('/api/payments', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { bookingId, customerId, phone } = req.query;
 
-  if (bookingId) {
-    payments = payments.filter(p => p.bookingId === bookingId);
+    let query = 'SELECT * FROM `payments` WHERE 1=1';
+    const params = [];
+
+    if (bookingId) {
+      query += ' AND `bookingId` = ?';
+      params.push(bookingId);
+    }
+
+    if (customerId) {
+      query += ' AND `customerId` = ?';
+      params.push(customerId);
+    }
+
+    if (phone) {
+      query += ' AND `customerPhone` = ?';
+      params.push(normalizePhone(phone));
+    }
+
+    query += ' ORDER BY `createdAt` DESC';
+
+    const [rows] = await pool.query(query, params);
+    const formatted = rows.map(r => ({ ...r, amount: Number(r.amount) }));
+
+    res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('Error fetching payments:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب المدفوعات' });
   }
-
-  if (customerId) {
-    payments = payments.filter(p => p.customerId === customerId);
-  }
-
-  if (phone) {
-    const norm = normalizePhone(phone);
-    payments = payments.filter(p => normalizePhone(p.customerPhone) === norm);
-  }
-
-  res.json({ success: true, count: payments.length, data: payments });
 });
 
-app.post('/api/payments', (req, res) => {
-  const { 
-    bookingId, 
-    amount, 
-    paymentMethod = 'cash', 
-    type = 'payment', 
-    notes = '', 
-    createdBy = 'مدير النظام' 
-  } = req.body;
+app.post('/api/payments', async (req, res) => {
+  try {
+    const pool = getPool();
+    const {
+      bookingId,
+      amount,
+      paymentMethod = 'cash',
+      type = 'payment',
+      notes = '',
+      createdBy = 'مدير النظام'
+    } = req.body;
 
-  if (!bookingId || amount === undefined || Number(amount) <= 0) {
-    return res.status(400).json({ success: false, message: 'رقم الحجز والمبلغ المطلوب سداده إجباريان وقيمة أكبر من الصفر' });
-  }
-
-  const bookings = getBookings();
-  const bookingIdx = bookings.findIndex(b => b.id === bookingId);
-
-  if (bookingIdx === -1) {
-    return res.status(404).json({ success: false, message: 'الحجز المرتبط غير موجود' });
-  }
-
-  const booking = bookings[bookingIdx];
-  if (booking.status === 'cancelled' || booking.status === 'ملغي') {
-    return res.status(400).json({ success: false, message: 'لا يمكن تسجيل دفعة لحجز ملغي' });
-  }
-
-  const payments = getPayments();
-  const enriched = enrichBooking(booking, payments);
-  const paymentAmount = Number(amount);
-
-  if (type === 'payment') {
-    if (paymentAmount > enriched.remainingAmount) {
-      return res.status(400).json({
-        success: false,
-        message: `المبلغ المطلوب (${paymentAmount} ج.م) أكبر من الرصيد المتبقي على الحجز (${enriched.remainingAmount} ج.م)`
-      });
+    if (!bookingId || amount === undefined || Number(amount) <= 0) {
+      return res.status(400).json({ success: false, message: 'رقم الحجز والمبلغ المطلوب سداده إجباريان وقيمة أكبر من الصفر' });
     }
-  } else if (type === 'refund') {
-    if (paymentAmount > enriched.paidAmount) {
-      return res.status(400).json({
-        success: false,
-        message: `مبلغ الاسترداد (${paymentAmount} ج.م) لا يمكن أن يتجاوز إجمالي ما دفعه العميل بالفعل (${enriched.paidAmount} ج.م)`
-      });
+
+    const [bRows] = await pool.query('SELECT * FROM `bookings` WHERE `id` = ?', [bookingId]);
+    if (bRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'الحجز المرتبط غير موجود' });
     }
+
+    const booking = bRows[0];
+    if (booking.status === 'cancelled' || booking.status === 'ملغي') {
+      return res.status(400).json({ success: false, message: 'لا يمكن تسجيل دفعة لحجز ملغي' });
+    }
+
+    const netAmount = Number(booking.netAmount);
+    const currentPaid = Number(booking.paidAmount);
+    const currentRemaining = Number(booking.remainingAmount);
+    const paymentAmount = Number(amount);
+
+    if (type === 'payment') {
+      if (paymentAmount > currentRemaining) {
+        return res.status(400).json({
+          success: false,
+          message: `المبلغ المطلوب (${paymentAmount} ج.م) أكبر من الرصيد المتبقي على الحجز (${currentRemaining} ج.م)`
+        });
+      }
+    } else if (type === 'refund') {
+      if (paymentAmount > currentPaid) {
+        return res.status(400).json({
+          success: false,
+          message: `مبلغ الاسترداد (${paymentAmount} ج.م) لا يمكن أن يتجاوز إجمالي ما دفعه العميل بالفعل (${currentPaid} ج.م)`
+        });
+      }
+    }
+
+    const paymentRef = 'PAY-' + Math.floor(100000 + Math.random() * 900000);
+
+    await pool.query(
+      `INSERT INTO \`payments\` 
+       (id, bookingId, customerId, customerName, customerPhone, amount, paymentMethod, type, notes, createdBy, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());`,
+      [
+        paymentRef, booking.id, booking.customerId, booking.customerName,
+        booking.customerPhone, paymentAmount, paymentMethod, type,
+        notes.trim(), createdBy
+      ]
+    );
+
+    // Compute new paid & remaining amounts
+    const delta = type === 'refund' ? -paymentAmount : paymentAmount;
+    const newPaid = Math.max(0, currentPaid + delta);
+    const newRemaining = Math.max(0, netAmount - newPaid);
+
+    let newPaymentStatus = 'unpaid';
+    if (newPaid >= netAmount && netAmount > 0) {
+      newPaymentStatus = 'paid';
+    } else if (newPaid > 0 && newPaid < netAmount) {
+      newPaymentStatus = 'partial';
+    }
+
+    await pool.query(
+      `UPDATE \`bookings\` 
+       SET \`paidAmount\` = ?, \`remainingAmount\` = ?, \`paymentStatus\` = ? 
+       WHERE \`id\` = ?;`,
+      [newPaid, newRemaining, newPaymentStatus, booking.id]
+    );
+
+    const newPayment = {
+      id: paymentRef,
+      bookingId: booking.id,
+      customerId: booking.customerId,
+      customerName: booking.customerName,
+      customerPhone: booking.customerPhone,
+      amount: paymentAmount,
+      paymentMethod,
+      type,
+      notes: notes.trim(),
+      createdBy,
+      createdAt: new Date().toISOString()
+    };
+
+    const updatedBooking = {
+      ...booking,
+      paidAmount: newPaid,
+      remainingAmount: newRemaining,
+      paymentStatus: newPaymentStatus
+    };
+
+    res.status(201).json({
+      success: true,
+      message: type === 'refund' ? 'تم تسجيل حركة الاسترداد بنجاح' : 'تم تسجيل الدفعة بنجاح! 💵',
+      data: newPayment,
+      booking: updatedBooking
+    });
+  } catch (err) {
+    console.error('Error recording payment:', err);
+    res.status(500).json({ success: false, message: 'خطأ في تسجيل الدفعة' });
   }
-
-  const paymentRef = 'PAY-' + Math.floor(100000 + Math.random() * 900000);
-  const createdAt = new Date().toISOString();
-
-  const newPayment = {
-    id: paymentRef,
-    bookingId: booking.id,
-    customerId: booking.customerId,
-    customerName: booking.customerName,
-    customerPhone: booking.customerPhone,
-    amount: paymentAmount,
-    paymentMethod,
-    type,
-    notes: notes.trim(),
-    createdBy,
-    createdAt
-  };
-
-  payments.unshift(newPayment);
-  savePayments(payments);
-
-  // Recalculate booking with newly added payment
-  const updatedEnriched = enrichBooking(booking, payments);
-  bookings[bookingIdx] = {
-    ...booking,
-    paidAmount: updatedEnriched.paidAmount,
-    remainingAmount: updatedEnriched.remainingAmount,
-    paymentStatus: updatedEnriched.paymentStatus
-  };
-  saveBookings(bookings);
-
-  res.status(201).json({
-    success: true,
-    message: type === 'refund' ? 'تم تسجيل حركة الاسترداد بنجاح' : 'تم تسجيل الدفعة بنجاح! 💵',
-    data: newPayment,
-    booking: bookings[bookingIdx]
-  });
 });
 
 // --- FINANCES SUMMARY ---
-app.get('/api/finances', (req, res) => {
-  const { period = 'all' } = req.query;
-  const bookings = getBookings();
-  const payments = getPayments();
+app.get('/api/finances', async (req, res) => {
+  try {
+    const pool = getPool();
 
-  // Filter out cancelled bookings from financial totals
-  const validBookings = bookings.filter(b => b.status !== 'cancelled' && b.status !== 'ملغي');
-  const enrichedBookings = validBookings.map(b => enrichBooking(b, payments));
+    const [[totals]] = await pool.query(`
+      SELECT 
+        COUNT(id) AS bookingsCount,
+        COALESCE(SUM(totalAmount), 0) AS grossTotal,
+        COALESCE(SUM(discountAmount), 0) AS totalDiscounts,
+        COALESCE(SUM(netAmount), 0) AS netTotal,
+        COALESCE(SUM(remainingAmount), 0) AS dueTotal
+      FROM \`bookings\`
+      WHERE \`status\` NOT IN ('cancelled', 'ملغي');
+    `);
 
-  const grossTotal = enrichedBookings.reduce((sum, b) => sum + b.totalAmount, 0);
-  const totalDiscounts = enrichedBookings.reduce((sum, b) => sum + b.discountAmount, 0);
-  const netTotal = enrichedBookings.reduce((sum, b) => sum + b.netAmount, 0);
+    // Strictly calculate collected total from valid payments
+    const [[collected]] = await pool.query(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN type = 'refund' THEN -amount ELSE amount END), 0) AS collectedTotal,
+        COALESCE(SUM(CASE WHEN paymentMethod = 'cash' THEN (CASE WHEN type = 'refund' THEN -amount ELSE amount END) ELSE 0 END), 0) AS cashTotal,
+        COALESCE(SUM(CASE WHEN paymentMethod = 'vodafone' THEN (CASE WHEN type = 'refund' THEN -amount ELSE amount END) ELSE 0 END), 0) AS vodafoneTotal,
+        COALESCE(SUM(CASE WHEN paymentMethod = 'card' THEN (CASE WHEN type = 'refund' THEN -amount ELSE amount END) ELSE 0 END), 0) AS cardTotal
+      FROM \`payments\`;
+    `);
 
-  // Collected revenue is strictly calculated from actual payments ledger
-  const validPayments = payments.filter(p => p.status !== 'reversed');
-  const collectedTotal = validPayments.reduce((sum, p) => {
-    const amt = Number(p.amount || 0);
-    return sum + (p.type === 'refund' ? -amt : amt);
-  }, 0);
+    // Status counts
+    const [statusRows] = await pool.query(`
+      SELECT paymentStatus, COUNT(*) AS count
+      FROM \`bookings\`
+      WHERE \`status\` NOT IN ('cancelled', 'ملغي')
+      GROUP BY paymentStatus;
+    `);
 
-  const dueTotal = Math.max(0, netTotal - collectedTotal);
+    const statusCounts = { paid: 0, partial: 0, unpaid: 0 };
+    statusRows.forEach(r => {
+      if (statusCounts[r.paymentStatus] !== undefined) {
+        statusCounts[r.paymentStatus] = Number(r.count);
+      }
+    });
 
-  // Payment methods breakdown
-  const byPaymentMethod = { cash: 0, vodafone: 0, card: 0 };
-  validPayments.forEach(p => {
-    const amt = Number(p.amount || 0) * (p.type === 'refund' ? -1 : 1);
-    if (p.paymentMethod === 'vodafone') byPaymentMethod.vodafone += amt;
-    else if (p.paymentMethod === 'card') byPaymentMethod.card += amt;
-    else byPaymentMethod.cash += amt;
-  });
-
-  // Payment status breakdown
-  const statusCounts = { paid: 0, partial: 0, unpaid: 0 };
-  enrichedBookings.forEach(b => {
-    if (statusCounts[b.paymentStatus] !== undefined) {
-      statusCounts[b.paymentStatus]++;
-    }
-  });
-
-  res.json({
-    success: true,
-    data: {
-      bookingsCount: validBookings.length,
-      grossTotal,
-      totalDiscounts,
-      netTotal,
-      collectedTotal,
-      dueTotal,
-      byPaymentMethod,
-      statusCounts
-    }
-  });
+    res.json({
+      success: true,
+      data: {
+        bookingsCount: Number(totals.bookingsCount),
+        grossTotal: Number(totals.grossTotal),
+        totalDiscounts: Number(totals.totalDiscounts),
+        netTotal: Number(totals.netTotal),
+        collectedTotal: Number(collected.collectedTotal),
+        dueTotal: Number(totals.dueTotal),
+        byPaymentMethod: {
+          cash: Number(collected.cashTotal),
+          vodafone: Number(collected.vodafoneTotal),
+          card: Number(collected.cardTotal)
+        },
+        statusCounts
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching finances:', err);
+    res.status(500).json({ success: false, message: 'خطأ في جلب تقرير الماليات' });
+  }
 });
 
 // --- AUTH ---
@@ -904,6 +1013,17 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ success: true, message: 'تم تسجيل الدخول بنجاح', data: user });
 });
 
-app.listen(PORT, () => {
-  console.log('🚀 Malaeb Full Express API running on port ' + PORT);
-});
+// Initialize database and start server
+async function startServer() {
+  try {
+    await initDatabase();
+    app.listen(PORT, () => {
+      console.log(`🚀 Malaeb Node.js + MySQL Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  }
+}
+
+startServer();
