@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, CalendarCheck, MapPin, LogOut, Search, Activity, Plus, Trash2, 
-  Edit, Download, DollarSign, Eye, AlertCircle, CheckCircle, Tag
+  Edit, Download, DollarSign, Eye, AlertCircle, CheckCircle, Tag,
+  Palette, Shield, User
 } from 'lucide-react';
-import { fetchBookings, fetchPitches, cancelBooking, deletePitch } from '../utils/api';
+import { fetchBookings, fetchPitches, cancelBooking, deletePitch, fetchSettings } from '../utils/api';
 import AdminQuickBooking from './AdminQuickBooking';
 import AdminFinancesTab from './AdminFinancesTab';
 import AdminCustomersTab from './AdminCustomersTab';
+import AdminSettingsTab from './AdminSettingsTab';
+import AdminUsersTab from './AdminUsersTab';
 import AdminAddPitchModal from './AdminAddPitchModal';
 import AdminEditPitchModal from './AdminEditPitchModal';
 import AdminBookingDetailModal from './AdminBookingDetailModal';
@@ -15,12 +18,23 @@ import Toast from './Toast';
 import { getTimeFormat, setTimeFormat, formatSlotTime } from '../utils/timeFormat';
 
 export default function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState('quick'); // 'quick' | 'bookings' | 'customers' | 'pitches' | 'finances'
+  const [activeTab, setActiveTab] = useState('quick'); // 'quick' | 'bookings' | 'customers' | 'pitches' | 'finances' | 'settings' | 'users'
   const [toast, setToast] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const [showAddPitchModal, setShowAddPitchModal] = useState(false);
   const [editingPitch, setEditingPitch] = useState(null);
   const [timeFormat, setTimeFormatState] = useState(getTimeFormat());
+
+  // Logged-in admin user and site settings
+  const [adminUser, setAdminUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('malaeb_admin_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [siteSettings, setSiteSettings] = useState({ title: 'مَلعبك', logoUrl: '', logoEmoji: '⚽' });
 
   // Data states
   const [bookings, setBookings] = useState([]);
@@ -32,6 +46,13 @@ export default function AdminDashboard() {
   const [viewBookingId, setViewBookingId] = useState(null);
   const [paymentBooking, setPaymentBooking] = useState(null);
 
+  const hasPerm = (perm) => {
+    if (!adminUser) return true;
+    if (adminUser.role === 'superadmin') return true;
+    const perms = Array.isArray(adminUser.permissions) ? adminUser.permissions : [];
+    return perms.includes(perm);
+  };
+
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setRefresh(prev => prev + 1);
@@ -39,12 +60,14 @@ export default function AdminDashboard() {
 
   const loadDashboardData = async () => {
     setLoading(true);
-    const [bRes, pRes] = await Promise.all([
+    const [bRes, pRes, sRes] = await Promise.all([
       fetchBookings(),
-      fetchPitches()
+      fetchPitches(),
+      fetchSettings()
     ]);
     if (bRes.success) setBookings(bRes.data || []);
     if (pRes.success) setPitches(pRes.data || []);
+    if (sRes.success && sRes.data) setSiteSettings(sRes.data);
     setLoading(false);
   };
 
@@ -61,6 +84,25 @@ export default function AdminDashboard() {
     window.addEventListener('timeFormatChanged', handleTimeFormatChange);
     return () => window.removeEventListener('timeFormatChanged', handleTimeFormatChange);
   }, [refresh]);
+
+  // Ensure user is on a permitted tab
+  useEffect(() => {
+    const permMap = {
+      quick: 'quick_booking',
+      bookings: 'manage_bookings',
+      customers: 'manage_customers',
+      pitches: 'manage_pitches',
+      finances: 'manage_finances',
+      settings: 'manage_settings',
+      users: 'manage_users'
+    };
+
+    if (adminUser && !hasPerm(permMap[activeTab])) {
+      const order = ['quick', 'bookings', 'customers', 'pitches', 'finances', 'settings', 'users'];
+      const firstAllowed = order.find(t => hasPerm(permMap[t])) || 'quick';
+      setActiveTab(firstAllowed);
+    }
+  }, [adminUser]);
 
   const handleLogout = () => {
     localStorage.removeItem('malaeb_admin');
@@ -174,111 +216,193 @@ export default function AdminDashboard() {
         boxShadow: 'var(--shadow-md)'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: '22px', fontWeight: 900, display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span>لوحة تحكم ملاعبك</span>
-            <span style={{ color: 'var(--accent-lime)' }}>⚽</span>
+          <div style={{ fontSize: '22px', fontWeight: 900, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {siteSettings.logoUrl ? (
+              <img src={siteSettings.logoUrl} alt="Logo" style={{ maxHeight: '32px', maxWidth: '100px', objectFit: 'contain' }} />
+            ) : null}
+            <span>لوحة تحكم {siteSettings.title || 'مَلعبك'}</span>
+            {!siteSettings.logoUrl && <span style={{ color: 'var(--accent-lime)' }}>{siteSettings.logoEmoji || '⚽'}</span>}
           </div>
           
-          <nav style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button 
-              onClick={() => setActiveTab('quick')}
-              style={{
-                background: activeTab === 'quick' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                color: activeTab === 'quick' ? 'var(--accent-lime)' : '#c2dcd0',
-                border: 'none',
-                padding: '8px 14px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <Plus size={18} />
-              حجز سريع
-            </button>
+          <nav style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {hasPerm('quick_booking') && (
+              <button 
+                onClick={() => setActiveTab('quick')}
+                style={{
+                  background: activeTab === 'quick' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'quick' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Plus size={17} />
+                حجز سريع
+              </button>
+            )}
 
-            <button 
-              onClick={() => setActiveTab('bookings')}
-              style={{
-                background: activeTab === 'bookings' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                color: activeTab === 'bookings' ? 'var(--accent-lime)' : '#c2dcd0',
-                border: 'none',
-                padding: '8px 14px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <CalendarCheck size={18} />
-              الحجوزات
-            </button>
+            {hasPerm('manage_bookings') && (
+              <button 
+                onClick={() => setActiveTab('bookings')}
+                style={{
+                  background: activeTab === 'bookings' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'bookings' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <CalendarCheck size={17} />
+                الحجوزات
+              </button>
+            )}
 
-            {/* Customers CRM Tab */}
-            <button 
-              onClick={() => setActiveTab('customers')}
-              style={{
-                background: activeTab === 'customers' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                color: activeTab === 'customers' ? 'var(--accent-lime)' : '#c2dcd0',
-                border: 'none',
-                padding: '8px 14px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <Users size={18} />
-              العملاء
-            </button>
+            {hasPerm('manage_customers') && (
+              <button 
+                onClick={() => setActiveTab('customers')}
+                style={{
+                  background: activeTab === 'customers' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'customers' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Users size={17} />
+                العملاء
+              </button>
+            )}
 
-            <button 
-              onClick={() => setActiveTab('pitches')}
-              style={{
-                background: activeTab === 'pitches' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                color: activeTab === 'pitches' ? 'var(--accent-lime)' : '#c2dcd0',
-                border: 'none',
-                padding: '8px 14px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <MapPin size={18} />
-              الملاعب
-            </button>
+            {hasPerm('manage_pitches') && (
+              <button 
+                onClick={() => setActiveTab('pitches')}
+                style={{
+                  background: activeTab === 'pitches' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'pitches' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <MapPin size={17} />
+                الملاعب
+              </button>
+            )}
 
-            <button 
-              onClick={() => setActiveTab('finances')}
-              style={{
-                background: activeTab === 'finances' ? 'rgba(255,255,255,0.1)' : 'transparent',
-                color: activeTab === 'finances' ? 'var(--accent-lime)' : '#c2dcd0',
-                border: 'none',
-                padding: '8px 14px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <DollarSign size={18} />
-              الماليات
-            </button>
+            {hasPerm('manage_finances') && (
+              <button 
+                onClick={() => setActiveTab('finances')}
+                style={{
+                  background: activeTab === 'finances' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'finances' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <DollarSign size={17} />
+                الماليات
+              </button>
+            )}
+
+            {hasPerm('manage_settings') && (
+              <button 
+                onClick={() => setActiveTab('settings')}
+                style={{
+                  background: activeTab === 'settings' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'settings' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Palette size={17} />
+                الهوية والإعدادات
+              </button>
+            )}
+
+            {hasPerm('manage_users') && (
+              <button 
+                onClick={() => setActiveTab('users')}
+                style={{
+                  background: activeTab === 'users' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: activeTab === 'users' ? 'var(--accent-lime)' : '#c2dcd0',
+                  border: 'none',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Shield size={17} />
+                المستخدمين والصلاحيات
+              </button>
+            )}
           </nav>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          {/* User profile pill */}
+          {adminUser && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: 'rgba(255,255,255,0.08)',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              fontSize: '13px'
+            }}>
+              <User size={15} color="var(--accent-lime)" />
+              <span style={{ fontWeight: 800 }}>{adminUser.name || adminUser.username}</span>
+              <span style={{
+                background: adminUser.role === 'superadmin' ? 'var(--accent-lime)' : 'rgba(255,255,255,0.15)',
+                color: adminUser.role === 'superadmin' ? '#000' : '#fff',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}>
+                {adminUser.role === 'superadmin' ? 'مدير عام' : 
+                 adminUser.role === 'booking_agent' ? 'حجوزات' :
+                 adminUser.role === 'accountant' ? 'محاسب' : 'مشرف'}
+              </span>
+            </div>
+          )}
+
           {/* 12h / 24h Time Format Switcher */}
           <div style={{
             display: 'flex',
@@ -402,7 +526,9 @@ export default function AdminDashboard() {
               {activeTab === 'bookings' ? 'إدارة الحجوزات والمدفوعات' : 
                activeTab === 'quick' ? 'إضافة حجز سريع وجدول المواعيد' : 
                activeTab === 'customers' ? 'نظام إدارة العملاء (CRM)' :
-               activeTab === 'finances' ? 'التقارير المالية والمصروفات' : 'إدارة الملاعب'}
+               activeTab === 'finances' ? 'التقارير المالية والمصروفات' :
+               activeTab === 'settings' ? 'إعدادات وهوية المنصة والشعار' :
+               activeTab === 'users' ? 'إدارة المستخدمين والصلاحيات' : 'إدارة الملاعب'}
             </h2>
 
             {activeTab === 'bookings' && (
@@ -427,7 +553,7 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {activeTab === 'pitches' && (
+            {activeTab === 'pitches' && hasPerm('manage_pitches') && (
               <button 
                 onClick={() => setShowAddPitchModal(true)}
                 style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}
@@ -444,6 +570,10 @@ export default function AdminDashboard() {
             <AdminCustomersTab showToast={showToast} />
           ) : activeTab === 'finances' ? (
             <AdminFinancesTab showToast={showToast} />
+          ) : activeTab === 'settings' ? (
+            <AdminSettingsTab showToast={showToast} />
+          ) : activeTab === 'users' ? (
+            <AdminUsersTab currentUser={adminUser} showToast={showToast} />
           ) : activeTab === 'bookings' ? (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right' }}>
@@ -516,7 +646,7 @@ export default function AdminDashboard() {
                         </td>
                         <td style={{ padding: '12px' }}>
                           <div style={{ display: 'flex', gap: '6px' }}>
-                            {b.remainingAmount > 0 && !isCancelled && (
+                            {b.remainingAmount > 0 && !isCancelled && hasPerm('manage_finances') && (
                               <button
                                 onClick={() => setPaymentBooking(b)}
                                 title="تسجيل دفعة سداد"
@@ -541,7 +671,7 @@ export default function AdminDashboard() {
                             >
                               <Eye size={16} />
                             </button>
-                            {!isCancelled && (
+                            {!isCancelled && hasPerm('manage_bookings') && (
                               <button 
                                 onClick={() => handleCancelBooking(b.id)}
                                 title="إلغاء الحجز"
@@ -598,46 +728,52 @@ export default function AdminDashboard() {
                         <td style={{ padding: '14px', color: 'var(--text-muted)' }}>{p.ownerPhone}</td>
                         <td style={{ padding: '14px' }}>
                           <div style={{ display: 'flex', gap: '8px' }}>
-                            <button
-                              onClick={() => setEditingPitch(p)}
-                              title="تعديل بيانات وساعات الملعب"
-                              style={{
-                                background: '#f0fdf4',
-                                border: '1px solid #bbf7d0',
-                                color: '#16a34a',
-                                padding: '6px 10px',
-                                borderRadius: '6px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                fontSize: '12px',
-                                fontWeight: '800'
-                              }}
-                            >
-                              <Edit size={14} />
-                              تعديل
-                            </button>
-                            <button
-                              onClick={() => handleDeletePitch(p.id, p.nameAr || p.name)}
-                              title="حذف الملعب نهائياً"
-                              style={{
-                                background: '#fef2f2',
-                                border: '1px solid #fecaca',
-                                color: '#dc2626',
-                                padding: '6px 10px',
-                                borderRadius: '6px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                fontSize: '12px',
-                                fontWeight: '800'
-                              }}
-                            >
-                              <Trash2 size={14} />
-                              حذف
-                            </button>
+                            {hasPerm('manage_pitches') ? (
+                              <>
+                                <button
+                                  onClick={() => setEditingPitch(p)}
+                                  title="تعديل بيانات وساعات الملعب"
+                                  style={{
+                                    background: '#f0fdf4',
+                                    border: '1px solid #bbf7d0',
+                                    color: '#16a34a',
+                                    padding: '6px 10px',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: '800'
+                                  }}
+                                >
+                                  <Edit size={14} />
+                                  تعديل
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePitch(p.id, p.nameAr || p.name)}
+                                  title="حذف الملعب نهائياً"
+                                  style={{
+                                    background: '#fef2f2',
+                                    border: '1px solid #fecaca',
+                                    color: '#dc2626',
+                                    padding: '6px 10px',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: '800'
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                  حذف
+                                </button>
+                              </>
+                            ) : (
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>عرض فقط</span>
+                            )}
                           </div>
                         </td>
                       </tr>

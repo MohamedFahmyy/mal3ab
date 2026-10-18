@@ -83,6 +83,26 @@ CREATE TABLE IF NOT EXISTS `payments` (
   CONSTRAINT `fk_payments_booking` FOREIGN KEY (`bookingId`) REFERENCES `bookings`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 5. جدول إعدادات وبيانات المنصة (Settings & Platform Metadata)
+CREATE TABLE IF NOT EXISTS `settings` (
+  `key` VARCHAR(100) NOT NULL PRIMARY KEY,
+  `value` LONGTEXT,
+  `updatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 6. جدول مديري ومستخدمي لوحة التحكم والصلاحيات (Admin Users & Permissions)
+CREATE TABLE IF NOT EXISTS `admin_users` (
+  `id` VARCHAR(50) NOT NULL PRIMARY KEY,
+  `name` VARCHAR(255) NOT NULL,
+  `username` VARCHAR(100) NOT NULL UNIQUE,
+  `password` VARCHAR(255) NOT NULL,
+  `role` VARCHAR(50) DEFAULT 'admin',
+  `permissions` JSON,
+  `isActive` TINYINT(1) DEFAULT 1,
+  `createdAt` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- =====================================================
@@ -118,3 +138,21 @@ ON DUPLICATE KEY UPDATE `customerName`=VALUES(`customerName`);
 INSERT INTO `payments` (`id`, `bookingId`, `customerId`, `customerName`, `customerPhone`, `amount`, `paymentMethod`, `type`, `notes`, `createdBy`) VALUES
 ('pay-sample-1', 'b-sample-1', 'cust-1', 'محمد أحمد', '01012345678', 150.00, 'cash', 'payment', 'عربون حجز نقدي', 'مدير النظام')
 ON DUPLICATE KEY UPDATE `amount`=VALUES(`amount`);
+
+-- إعدادات المنصة والهوية
+INSERT INTO `settings` (`key`, `value`) VALUES
+('title', 'مَلعبك'),
+('slogan', 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر'),
+('heroTitle', 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽'),
+('heroSubtitle', 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.'),
+('logoUrl', ''),
+('logoEmoji', '⚽'),
+('contactPhone', '19989'),
+('contactEmail', 'support@malaeb.eg'),
+('footerAbout', 'المنصة الأولى المخصصة لحجز ملاعب كرة القدم في مصر. نهدف لتسهيل تجربة حجز الملاعب للاعبين وأصحاب الملاعب بأحدث التقنيات.')
+ON DUPLICATE KEY UPDATE `value`=VALUES(`value`);
+
+-- حساب المدير العام الأولي والصلاحيات
+INSERT INTO `admin_users` (`id`, `name`, `username`, `password`, `role`, `permissions`, `isActive`) VALUES
+('user-admin', 'مدير النظام (Admin)', 'admin', 'admin', 'superadmin', '[\"quick_booking\", \"manage_bookings\", \"manage_customers\", \"manage_pitches\", \"manage_finances\", \"manage_settings\", \"manage_users\"]', 1)
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`);

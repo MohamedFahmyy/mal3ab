@@ -11,11 +11,19 @@ import HowItWorks from './components/HowItWorks';
 import PitchOwnerCTA from './components/PitchOwnerCTA';
 import Footer from './components/Footer';
 import Toast from './components/Toast';
-import { fetchPitches } from './utils/api';
+import { fetchPitches, fetchSettings } from './utils/api';
 
 export default function App() {
   const [pitches, setPitches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState({
+    title: 'مَلعبك',
+    slogan: 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر',
+    heroTitle: 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽',
+    heroSubtitle: 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.',
+    logoUrl: '',
+    logoEmoji: '⚽'
+  });
   const [filters, setFilters] = useState({
     area: 'الكل',
     type: 'الكل',
@@ -43,6 +51,16 @@ export default function App() {
     setToast({ message, type });
   };
 
+  const loadSettingsData = async () => {
+    const res = await fetchSettings();
+    if (res.success && res.data) {
+      setSettings(res.data);
+      if (res.data.title) {
+        document.title = `${res.data.title} | ${res.data.slogan || ''}`;
+      }
+    }
+  };
+
   const loadPitchesData = async () => {
     setLoading(true);
     const res = await fetchPitches(filters);
@@ -53,6 +71,10 @@ export default function App() {
     }
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadSettingsData();
+  }, []);
 
   useEffect(() => {
     loadPitchesData();
@@ -114,6 +136,7 @@ export default function App() {
     <div>
       {/* Top Navbar */}
       <Navbar
+        settings={settings}
         user={user}
         onOpenLogin={() => setActiveModal('login')}
         onLogout={handleLogout}
@@ -129,6 +152,7 @@ export default function App() {
 
       {/* Hero Search Section */}
       <Hero
+        settings={settings}
         filters={filters}
         setFilters={setFilters}
         onSearch={handleSearchClick}
@@ -151,7 +175,7 @@ export default function App() {
       <PitchOwnerCTA onRegisterClick={() => setActiveModal('registerPitch')} />
 
       {/* Footer */}
-      <Footer />
+      <Footer settings={settings} />
 
       {/* Modals */}
       {activeModal === 'detail' && selectedPitch && (

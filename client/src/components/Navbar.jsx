@@ -3,6 +3,7 @@ import { Calendar, User, PlusCircle, Search, Menu, X, LogOut, Clock } from 'luci
 import { getTimeFormat, setTimeFormat } from '../utils/timeFormat';
 
 export default function Navbar({
+  settings = {},
   user,
   onOpenLogin,
   onLogout,
@@ -19,6 +20,10 @@ export default function Navbar({
     window.addEventListener('timeFormatChanged', handleFormatChange);
     return () => window.removeEventListener('timeFormatChanged', handleFormatChange);
   }, []);
+
+  const siteTitle = settings.title || 'مَلعبك';
+  const siteLogo = settings.logoUrl;
+  const siteEmoji = settings.logoEmoji || '⚽';
 
   return (
     <header style={{
@@ -46,11 +51,18 @@ export default function Navbar({
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px'
+            gap: '8px'
           }}
         >
-          <span>مَلعبك</span>
-          <span style={{ color: 'var(--primary)' }}>⚽</span>
+          {siteLogo ? (
+            <img 
+              src={siteLogo} 
+              alt={siteTitle} 
+              style={{ maxHeight: '42px', maxWidth: '140px', objectFit: 'contain' }} 
+            />
+          ) : null}
+          <span>{siteTitle}</span>
+          {!siteLogo && <span style={{ color: 'var(--primary)' }}>{siteEmoji}</span>}
         </div>
 
         {/* Desktop Nav Links */}

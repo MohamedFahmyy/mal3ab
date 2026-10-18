@@ -128,6 +128,28 @@ export async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`settings\` (
+        \`key\` VARCHAR(100) NOT NULL PRIMARY KEY,
+        \`value\` LONGTEXT,
+        \`updatedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`admin_users\` (
+        \`id\` VARCHAR(50) NOT NULL PRIMARY KEY,
+        \`name\` VARCHAR(255) NOT NULL,
+        \`username\` VARCHAR(100) NOT NULL UNIQUE,
+        \`password\` VARCHAR(255) NOT NULL,
+        \`role\` VARCHAR(50) DEFAULT 'admin',
+        \`permissions\` JSON,
+        \`isActive\` TINYINT(1) DEFAULT 1,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
     // 4. Auto-seed from JSON files if database tables are empty
     await autoSeedFromFiles();
 
@@ -269,6 +291,40 @@ async function autoSeedFromFiles() {
       );
     }
     console.log(`🌱 Seeded ${payments.length} payments into MySQL.`);
+  }
+
+  // Seed Settings
+  const [[{ settingsCount }]] = await pool.query('SELECT COUNT(*) AS settingsCount FROM `settings`;');
+  if (settingsCount === 0) {
+    const defaultSettings = [
+      ['title', 'مَلعبك'],
+      ['slogan', 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر'],
+      ['heroTitle', 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽'],
+      ['heroSubtitle', 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.'],
+      ['logoUrl', ''],
+      ['logoEmoji', '⚽'],
+      ['contactPhone', '19989'],
+      ['contactEmail', 'support@malaeb.eg'],
+      ['footerAbout', 'المنصة الأولى المخصصة لحجز ملاعب كرة القدم في مصر. نهدف لتسهيل تجربة حجز الملاعب للاعبين وأصحاب الملاعب بأحدث التقنيات.']
+    ];
+    for (const [key, value] of defaultSettings) {
+      await pool.query('INSERT INTO `settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`);', [key, value]);
+    }
+    console.log('🌱 Seeded default site settings into MySQL.');
+  }
+
+  // Seed Superadmin User
+  const [[{ adminCount }]] = await pool.query('SELECT COUNT(*) AS adminCount FROM `admin_users`;');
+  if (adminCount === 0) {
+    const defaultPerms = JSON.stringify([
+      'quick_booking', 'manage_bookings', 'manage_customers', 'manage_pitches',
+      'manage_finances', 'manage_settings', 'manage_users'
+    ]);
+    await pool.query(
+      'INSERT INTO `admin_users` (id, name, username, password, role, permissions, isActive) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name);',
+      ['user-admin', 'مدير النظام (Admin)', 'admin', 'admin', 'superadmin', defaultPerms, 1]
+    );
+    console.log('🌱 Seeded default superadmin user into MySQL.');
   }
 }
 

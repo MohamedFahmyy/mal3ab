@@ -1118,6 +1118,218 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ success: true, message: 'تم تسجيل الدخول بنجاح', data: user });
 });
 
+// --- SETTINGS (TITLE, SLOGAN, LOGO, METADATA) ---
+app.get('/api/settings', async (req, res) => {
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query('SELECT `key`, `value` FROM `settings`;');
+    const settings = {};
+    for (const r of rows) {
+      settings[r.key] = r.value;
+    }
+    const defaults = {
+      title: 'مَلعبك',
+      slogan: 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر',
+      heroTitle: 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽',
+      heroSubtitle: 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.',
+      logoUrl: '',
+      logoEmoji: '⚽',
+      contactPhone: '19989',
+      contactEmail: 'support@malaeb.eg',
+      footerAbout: 'المنصة الأولى المخصصة لحجز ملاعب كرة القدم في مصر. نهدف لتسهيل تجربة حجز الملاعب للاعبين وأصحاب الملاعب بأحدث التقنيات.'
+    };
+    res.json({ success: true, data: { ...defaults, ...settings } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+const saveSettingsHandler = async (req, res) => {
+  try {
+    const pool = getPool();
+    const body = req.body || {};
+    for (const [k, v] of Object.entries(body)) {
+      if (k === 'updatedAt') continue;
+      const strVal = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
+      await pool.query(
+        'INSERT INTO `settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=CURRENT_TIMESTAMP;',
+        [k, strVal]
+      );
+    }
+    const [rows] = await pool.query('SELECT `key`, `value` FROM `settings`;');
+    const settings = {};
+    for (const r of rows) {
+      settings[r.key] = r.value;
+    }
+    res.json({ success: true, message: 'تم حفظ وتحديث إعدادات وبيانات المنصة بنجاح 🎉', data: settings });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+app.post('/api/settings', saveSettingsHandler);
+app.put('/api/settings', saveSettingsHandler);
+
+// --- ADMIN USERS & PERMISSIONS AUTH ---
+app.post('/api/auth/admin-login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
+    }
+
+    const pool = getPool();
+    const [rows] = await pool.query('SELECT * FROM `admin_users` WHERE username = ? LIMIT 1;', [username.trim()]);
+    let user = rows[0];
+
+    if (!user && username === 'admin' && password === 'admin') {
+      user = {
+        id: 'user-admin',
+        name: 'مدير النظام (Admin)',
+        username: 'admin',
+        password: 'admin',
+        role: 'superadmin',
+        permissions: ['quick_booking', 'manage_bookings', 'manage_customers', 'manage_pitches', 'manage_finances', 'manage_settings', 'manage_users'],
+        isActive: 1
+      };
+    }
+
+    if (!user || user.password !== password) {
+      return res.status(401).json({ success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ success: false, message: 'تم تعطيل هذا الحساب. يرجى مراجعة المسؤول' });
+    }
+
+    const perms = parseJsonField(user.permissions, []);
+    res.json({
+      success: true,
+      message: 'تم تسجيل الدخول بنجاح',
+      data: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        role: user.role,
+        permissions: perms
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/admin-users', async (req, res) => {
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query('SELECT id, name, username, role, permissions, isActive, createdAt FROM `admin_users` ORDER BY createdAt DESC;');
+    const users = rows.map(u => ({
+      ...u,
+      permissions: parseJsonField(u.permissions, []),
+      isActive: Boolean(u.isActive)
+    }));
+    res.json({ success: true, count: users.length, data: users });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/admin-users', async (req, res) => {
+  try {
+    const { name, username, password, role, permissions, isActive } = req.body;
+    if (!name || !username || !password) {
+      return res.status(400).json({ success: false, message: 'الاسم واسم المستخدم وكلمة المرور مطلوبة' });
+    }
+
+    const pool = getPool();
+    const [chk] = await pool.query('SELECT id FROM `admin_users` WHERE username = ?;', [username.trim()]);
+    if (chk.length > 0) {
+      return res.status(400).json({ success: false, message: 'اسم المستخدم مستخدم بالفعل، يرجى اختيار اسم آخر' });
+    }
+
+    const id = 'usr-' + Math.random().toString(36).substring(2, 9);
+    const permsJson = JSON.stringify(permissions || []);
+    const activeVal = isActive === undefined ? 1 : (isActive ? 1 : 0);
+
+    await pool.query(
+      'INSERT INTO `admin_users` (id, name, username, password, role, permissions, isActive) VALUES (?, ?, ?, ?, ?, ?, ?);',
+      [id, name.trim(), username.trim(), password.trim(), role || 'custom', permsJson, activeVal]
+    );
+
+    res.json({
+      success: true,
+      message: 'تم إنشاء المستخدم وتحديد صلاحياته بنجاح',
+      data: {
+        id,
+        name: name.trim(),
+        username: username.trim(),
+        role: role || 'custom',
+        permissions: permissions || [],
+        isActive: Boolean(activeVal)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/admin-users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, username, password, role, permissions, isActive } = req.body;
+
+    const pool = getPool();
+    const [existing] = await pool.query('SELECT * FROM `admin_users` WHERE id = ?;', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' });
+    }
+    const curr = existing[0];
+
+    if (username && username.trim() !== curr.username) {
+      const [chk] = await pool.query('SELECT id FROM `admin_users` WHERE username = ? AND id != ?;', [username.trim(), id]);
+      if (chk.length > 0) {
+        return res.status(400).json({ success: false, message: 'اسم المستخدم مستخدم بالفعل' });
+      }
+    }
+
+    const finalName = name ? name.trim() : curr.name;
+    const finalUsername = username ? username.trim() : curr.username;
+    const finalPassword = password && password.trim() ? password.trim() : curr.password;
+    const finalRole = role !== undefined ? role : curr.role;
+    const finalPerms = permissions !== undefined ? JSON.stringify(permissions) : (typeof curr.permissions === 'object' ? JSON.stringify(curr.permissions) : curr.permissions);
+    const finalActive = isActive !== undefined ? (isActive ? 1 : 0) : curr.isActive;
+
+    await pool.query(
+      'UPDATE `admin_users` SET name = ?, username = ?, password = ?, role = ?, permissions = ?, isActive = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?;',
+      [finalName, finalUsername, finalPassword, finalRole, finalPerms, finalActive, id]
+    );
+
+    res.json({ success: true, message: 'تم تحديث بيانات وصلاحيات المستخدم بنجاح' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/admin-users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pool = getPool();
+    const [existing] = await pool.query('SELECT * FROM `admin_users` WHERE id = ?;', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: 'المستخدم غير موجود' });
+    }
+
+    if (existing[0].username === 'admin') {
+      return res.status(400).json({ success: false, message: 'لا يمكن حذف الحساب الإداري الرئيسي (admin)' });
+    }
+
+    await pool.query('DELETE FROM `admin_users` WHERE id = ?;', [id]);
+    res.json({ success: true, message: 'تم حذف المستخدم بنجاح' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Serve frontend static assets in production if available
 const clientDist = path.join(__dirname, '../client/dist');
 const localPublic = path.join(__dirname, 'public');

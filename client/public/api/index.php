@@ -244,10 +244,83 @@ function initSchemaAndSeed($pdo, $driver) {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 
+    $sqlSettings = $isSqlite ? "
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    " : "
+        CREATE TABLE IF NOT EXISTS `settings` (
+            `key` VARCHAR(100) PRIMARY KEY,
+            `value` LONGTEXT,
+            `updatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+
+    $sqlAdminUsers = $isSqlite ? "
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL,
+            role TEXT DEFAULT 'admin',
+            permissions TEXT,
+            isActive INTEGER DEFAULT 1,
+            createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    " : "
+        CREATE TABLE IF NOT EXISTS `admin_users` (
+            `id` VARCHAR(50) PRIMARY KEY,
+            `name` VARCHAR(255) NOT NULL,
+            `username` VARCHAR(100) NOT NULL UNIQUE,
+            `password` VARCHAR(255) NOT NULL,
+            `role` VARCHAR(50) DEFAULT 'admin',
+            `permissions` JSON,
+            `isActive` TINYINT(1) DEFAULT 1,
+            `createdAt` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+
     $pdo->exec($sqlPitches);
     $pdo->exec($sqlCustomers);
     $pdo->exec($sqlBookings);
     $pdo->exec($sqlPayments);
+    $pdo->exec($sqlSettings);
+    $pdo->exec($sqlAdminUsers);
+
+    // Auto seed settings if empty
+    $settingsCount = $pdo->query("SELECT COUNT(*) FROM settings")->fetchColumn();
+    if ($settingsCount == 0) {
+        $defaultSettings = [
+            'title' => 'مَلعبك',
+            'slogan' => 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر',
+            'heroTitle' => 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽',
+            'heroSubtitle' => 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.',
+            'logoUrl' => '',
+            'logoEmoji' => '⚽',
+            'contactPhone' => '19989',
+            'contactEmail' => 'support@malaeb.eg',
+            'footerAbout' => 'المنصة الأولى المخصصة لحجز ملاعب كرة القدم في مصر. نهدف لتسهيل تجربة حجز الملاعب للاعبين وأصحاب الملاعب بأحدث التقنيات.'
+        ];
+        $insSetting = $pdo->prepare("INSERT INTO settings (key, value) VALUES (?, ?)");
+        foreach ($defaultSettings as $k => $v) {
+            $insSetting->execute([$k, $v]);
+        }
+    }
+
+    // Auto seed superadmin user if empty
+    $usersCount = $pdo->query("SELECT COUNT(*) FROM admin_users")->fetchColumn();
+    if ($usersCount == 0) {
+        $defaultPerms = json_encode([
+            'quick_booking', 'manage_bookings', 'manage_customers', 'manage_pitches',
+            'manage_finances', 'manage_settings', 'manage_users'
+        ], JSON_UNESCAPED_UNICODE);
+        $insUser = $pdo->prepare("INSERT INTO admin_users (id, name, username, password, role, permissions, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        $insUser->execute(['user-admin', 'مدير النظام (Admin)', 'admin', 'admin', 'superadmin', $defaultPerms, 1]);
+    }
 
     // Auto Seed default pitches if empty
     $count = $pdo->query("SELECT COUNT(*) FROM pitches")->fetchColumn();
@@ -452,7 +525,11 @@ $path = rtrim($path, '/');
 if ($path === '' || $path === '/api') $path = '/api';
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$body = json_decode(file_get_contents('php://input'), true) ?? [];
+$rawInput = file_get_contents('php://input');
+if (empty($rawInput) && isset($GLOBALS['mock_input'])) {
+    $rawInput = $GLOBALS['mock_input'];
+}
+$body = json_decode($rawInput, true) ?? [];
 
 // ----------------------------------------------------
 // 4. API Endpoints
@@ -1234,6 +1311,256 @@ if ($path === '/api/auth/login' && $method === 'POST') {
         'message' => 'تم تسجيل الدخول بنجاح',
         'data' => $user
     ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ----------------------------------------------------
+// 5. Settings Endpoints (Title, Slogan, Logo, Metadata)
+// ----------------------------------------------------
+
+// GET /api/settings
+if ($path === '/api/settings' && $method === 'GET') {
+    $rows = $pdo->query("SELECT key, value FROM settings")->fetchAll();
+    $settings = [];
+    foreach ($rows as $r) {
+        $settings[$r['key']] = $r['value'];
+    }
+    $defaults = [
+        'title' => 'مَلعبك',
+        'slogan' => 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر',
+        'heroTitle' => 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽',
+        'heroSubtitle' => 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.',
+        'logoUrl' => '',
+        'logoEmoji' => '⚽',
+        'contactPhone' => '19989',
+        'contactEmail' => 'support@malaeb.eg',
+        'footerAbout' => 'المنصة الأولى المخصصة لحجز ملاعب كرة القدم في مصر. نهدف لتسهيل تجربة حجز الملاعب للاعبين وأصحاب الملاعب بأحدث التقنيات.'
+    ];
+    $merged = array_merge($defaults, $settings);
+    echo json_encode(['success' => true, 'data' => $merged], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// PUT or POST /api/settings
+if ($path === '/api/settings' && ($method === 'PUT' || $method === 'POST')) {
+    if ($dbDriver === 'sqlite') {
+        $stmt = $pdo->prepare("INSERT OR REPLACE INTO settings (key, value, updatedAt) VALUES (?, ?, CURRENT_TIMESTAMP)");
+    } else {
+        $stmt = $pdo->prepare("INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`), `updatedAt` = CURRENT_TIMESTAMP");
+    }
+
+    foreach ($body as $k => $v) {
+        if ($k === 'updatedAt') continue;
+        if (is_array($v) || is_object($v)) {
+            $v = json_encode($v, JSON_UNESCAPED_UNICODE);
+        }
+        $stmt->execute([$k, (string)$v]);
+    }
+
+    $rows = $pdo->query("SELECT key, value FROM settings")->fetchAll();
+    $settings = [];
+    foreach ($rows as $r) {
+        $settings[$r['key']] = $r['value'];
+    }
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم حفظ وتحديث إعدادات وبيانات المنصة بنجاح 🎉',
+        'data' => $settings
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ----------------------------------------------------
+// 6. Admin Authentication & Users Management
+// ----------------------------------------------------
+
+// POST /api/auth/admin-login
+if ($path === '/api/auth/admin-login' && $method === 'POST') {
+    $username = trim($body['username'] ?? '');
+    $password = trim($body['password'] ?? '');
+
+    if (!$username || !$password) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'يرجى إدخال اسم المستخدم وكلمة المرور'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM admin_users WHERE username = ? LIMIT 1");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch();
+
+    if (!$user && $username === 'admin' && $password === 'admin') {
+        $user = [
+            'id' => 'user-admin',
+            'name' => 'مدير النظام (Admin)',
+            'username' => 'admin',
+            'password' => 'admin',
+            'role' => 'superadmin',
+            'permissions' => json_encode(['quick_booking', 'manage_bookings', 'manage_customers', 'manage_pitches', 'manage_finances', 'manage_settings', 'manage_users']),
+            'isActive' => 1
+        ];
+    }
+
+    if (!$user || $user['password'] !== $password) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'اسم المستخدم أو كلمة المرور غير صحيحة'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (empty($user['isActive'])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => 'تم تعطيل هذا الحساب. يرجى مراجعة المسؤول'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $perms = [];
+    if (!empty($user['permissions'])) {
+        $perms = is_array($user['permissions']) ? $user['permissions'] : (json_decode($user['permissions'], true) ?: []);
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم تسجيل الدخول بنجاح',
+        'data' => [
+            'id' => $user['id'],
+            'name' => $user['name'],
+            'username' => $user['username'],
+            'role' => $user['role'],
+            'permissions' => $perms
+        ]
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// GET /api/admin-users
+if ($path === '/api/admin-users' && $method === 'GET') {
+    $rows = $pdo->query("SELECT id, name, username, role, permissions, isActive, createdAt FROM admin_users ORDER BY createdAt DESC")->fetchAll();
+    $users = array_map(function($u) {
+        $perms = [];
+        if (!empty($u['permissions'])) {
+            $perms = is_array($u['permissions']) ? $u['permissions'] : (json_decode($u['permissions'], true) ?: []);
+        }
+        $u['permissions'] = $perms;
+        $u['isActive'] = (bool)$u['isActive'];
+        return $u;
+    }, $rows);
+
+    echo json_encode(['success' => true, 'count' => count($users), 'data' => $users], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// POST /api/admin-users
+if ($path === '/api/admin-users' && $method === 'POST') {
+    $name = trim($body['name'] ?? '');
+    $username = trim($body['username'] ?? '');
+    $password = trim($body['password'] ?? '');
+    $role = $body['role'] ?? 'custom';
+    $permissions = $body['permissions'] ?? [];
+    $isActive = isset($body['isActive']) ? ($body['isActive'] ? 1 : 0) : 1;
+
+    if (!$name || !$username || !$password) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'الاسم واسم المستخدم وكلمة المرور مطلوبة'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $check = $pdo->prepare("SELECT id FROM admin_users WHERE username = ?");
+    $check->execute([$username]);
+    if ($check->fetch()) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'اسم المستخدم مستخدم بالفعل، يرجى اختيار اسم آخر'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $id = 'usr-' . substr(md5(uniqid()), 0, 8);
+    $permsJson = json_encode($permissions, JSON_UNESCAPED_UNICODE);
+
+    $stmt = $pdo->prepare("INSERT INTO admin_users (id, name, username, password, role, permissions, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$id, $name, $username, $password, $role, $permsJson, $isActive]);
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم إنشاء المستخدم وتحديد صلاحياته بنجاح',
+        'data' => [
+            'id' => $id,
+            'name' => $name,
+            'username' => $username,
+            'role' => $role,
+            'permissions' => $permissions,
+            'isActive' => (bool)$isActive
+        ]
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// PUT /api/admin-users/:id
+if (preg_match('#^/api/admin-users/([a-zA-Z0-9_\-]+)$#', $path, $matches) && $method === 'PUT') {
+    $userId = $matches[1];
+    $name = trim($body['name'] ?? '');
+    $username = trim($body['username'] ?? '');
+    $password = isset($body['password']) ? trim($body['password']) : '';
+    $role = $body['role'] ?? null;
+    $permissions = isset($body['permissions']) ? json_encode($body['permissions'], JSON_UNESCAPED_UNICODE) : null;
+    $isActive = isset($body['isActive']) ? ($body['isActive'] ? 1 : 0) : null;
+
+    $stmt = $pdo->prepare("SELECT * FROM admin_users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $curr = $stmt->fetch();
+    if (!$curr) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'المستخدم غير موجود'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($username && $username !== $curr['username']) {
+        $chk = $pdo->prepare("SELECT id FROM admin_users WHERE username = ? AND id != ?");
+        $chk->execute([$username, $userId]);
+        if ($chk->fetch()) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'اسم المستخدم مستخدم بالفعل'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+
+    $finalName = $name ?: $curr['name'];
+    $finalUsername = $username ?: $curr['username'];
+    $finalPassword = $password !== '' ? $password : $curr['password'];
+    $finalRole = $role !== null ? $role : $curr['role'];
+    $finalPerms = $permissions !== null ? $permissions : $curr['permissions'];
+    $finalActive = $isActive !== null ? $isActive : $curr['isActive'];
+
+    $upd = $pdo->prepare("UPDATE admin_users SET name = ?, username = ?, password = ?, role = ?, permissions = ?, isActive = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?");
+    $upd->execute([$finalName, $finalUsername, $finalPassword, $finalRole, $finalPerms, $finalActive, $userId]);
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'تم تحديث بيانات وصلاحيات المستخدم بنجاح'
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// DELETE /api/admin-users/:id
+if (preg_match('#^/api/admin-users/([a-zA-Z0-9_\-]+)$#', $path, $matches) && $method === 'DELETE') {
+    $userId = $matches[1];
+    
+    $stmt = $pdo->prepare("SELECT * FROM admin_users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $u = $stmt->fetch();
+    if (!$u) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'المستخدم غير موجود'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($u['username'] === 'admin') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'لا يمكن حذف الحساب الإداري الرئيسي (admin)'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $del = $pdo->prepare("DELETE FROM admin_users WHERE id = ?");
+    $del->execute([$userId]);
+
+    echo json_encode(['success' => true, 'message' => 'تم حذف المستخدم بنجاح'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

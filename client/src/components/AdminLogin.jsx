@@ -1,18 +1,54 @@
-import React, { useState } from 'react';
-import { User, Lock, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Lock, ArrowRight, Loader2 } from 'lucide-react';
+import { adminLogin, fetchSettings } from '../utils/api';
 
 export default function AdminLogin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [settings, setSettings] = useState({ title: 'مَلعبك', logoUrl: '', logoEmoji: '⚽' });
 
-  const handleLogin = (e) => {
+  useEffect(() => {
+    fetchSettings().then(res => {
+      if (res.success && res.data) {
+        setSettings(res.data);
+      }
+    });
+  }, []);
+
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (username === 'admin' && password === 'admin') {
-      localStorage.setItem('malaeb_admin', 'true');
-      window.location.href = '/admin';
-    } else {
-      setError('بيانات الدخول غير صحيحة');
+    setError('');
+    setLoading(true);
+
+    try {
+      const res = await adminLogin(username, password);
+      if (res.success && res.data) {
+        localStorage.setItem('malaeb_admin', 'true');
+        localStorage.setItem('malaeb_admin_user', JSON.stringify(res.data));
+        window.location.href = '/admin';
+      } else {
+        // Fallback for offline / demo
+        if (username === 'admin' && password === 'admin') {
+          const fallbackUser = {
+            id: 'user-admin',
+            name: 'مدير النظام (Admin)',
+            username: 'admin',
+            role: 'superadmin',
+            permissions: ['quick_booking', 'manage_bookings', 'manage_customers', 'manage_pitches', 'manage_finances', 'manage_settings', 'manage_users']
+          };
+          localStorage.setItem('malaeb_admin', 'true');
+          localStorage.setItem('malaeb_admin_user', JSON.stringify(fallbackUser));
+          window.location.href = '/admin';
+          return;
+        }
+        setError(res.message || 'بيانات الدخول غير صحيحة');
+      }
+    } catch {
+      setError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -30,9 +66,9 @@ export default function AdminLogin() {
         padding: '40px',
         borderRadius: '20px',
         boxShadow: 'var(--shadow-md)',
-        width: 'min(400px, 90%)'
+        width: 'min(420px, 92%)'
       }}>
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div style={{
             fontSize: '32px',
             fontWeight: 900,
@@ -41,12 +77,15 @@ export default function AdminLogin() {
             alignItems: 'center',
             justifyContent: 'center',
             gap: '8px',
-            marginBottom: '10px'
+            marginBottom: '8px'
           }}>
-            <span>مَلعبك</span>
-            <span style={{ color: 'var(--primary)' }}>⚽</span>
+            {settings.logoUrl ? (
+              <img src={settings.logoUrl} alt={settings.title} style={{ maxHeight: '48px', maxWidth: '160px', objectFit: 'contain' }} />
+            ) : null}
+            <span>{settings.title || 'مَلعبك'}</span>
+            {!settings.logoUrl && <span style={{ color: 'var(--primary)' }}>{settings.logoEmoji || '⚽'}</span>}
           </div>
-          <h1 style={{ fontSize: '20px', color: 'var(--text-muted)' }}>تسجيل دخول لوحة التحكم</h1>
+          <h1 style={{ fontSize: '18px', color: 'var(--text-muted)' }}>تسجيل دخول لوحة التحكم الإدارية</h1>
         </div>
 
         {error && (
@@ -95,9 +134,23 @@ export default function AdminLogin() {
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '14px' }}>
-            <span>دخول للوحة التحكم</span>
-            <ArrowRight size={18} />
+          <button 
+            type="submit" 
+            className="btn btn-primary" 
+            disabled={loading}
+            style={{ width: '100%', padding: '14px', opacity: loading ? 0.7 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
+          >
+            {loading ? (
+              <>
+                <Loader2 size={18} className="spin" />
+                <span>جاري التحقق والدخول...</span>
+              </>
+            ) : (
+              <>
+                <span>دخول للوحة التحكم</span>
+                <ArrowRight size={18} />
+              </>
+            )}
           </button>
         </form>
 

@@ -1,8 +1,13 @@
 import React from 'react';
 import { Search, ShieldCheck, Clock } from 'lucide-react';
 
-export default function Hero({ filters, setFilters, onSearch }) {
+export default function Hero({ settings = {}, filters, setFilters, onSearch }) {
   const today = new Date().toISOString().split('T')[0];
+
+  const slogan = settings.slogan || 'المنصة رقم #1 لحجز ملاعب كرة القدم في مصر';
+  const heroTitle = settings.heroTitle || 'احجز ملعبك ولعبتك تبدأ في دقيقة ⚽';
+  const heroSubtitle = settings.heroSubtitle || 'اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.';
+  const emoji = settings.logoEmoji || '⚽';
 
   return (
     <section id="hero" style={{
@@ -33,18 +38,18 @@ export default function Hero({ filters, setFilters, onSearch }) {
         {/* Hero Left Content */}
         <div>
           <div className="badge" style={{ marginBottom: '14px', maxWidth: '100%' }}>
-            <span>⚽</span>
-            <span style={{ fontSize: '12px' }}>المنصة رقم #1 لحجز ملاعب كرة القدم في مصر</span>
+            <span>{emoji}</span>
+            <span style={{ fontSize: '12px' }}>{slogan}</span>
           </div>
 
           <h1 className="hero-title" style={{
             fontSize: '44px',
             lineHeight: '1.25',
             fontWeight: '900',
-            marginBottom: '14px'
+            marginBottom: '14px',
+            whiteSpace: 'pre-line'
           }}>
-            احجز ملعبك ولعبتك<br />
-            <span style={{ color: 'var(--accent-lime)' }}>تبدأ في دقيقة ⚽</span>
+            {heroTitle}
           </h1>
 
           <p style={{
@@ -54,7 +59,7 @@ export default function Hero({ filters, setFilters, onSearch }) {
             marginBottom: '24px',
             maxWidth: '540px'
           }}>
-            اختر أفضل الملاعب الخماسية والسباعية القريبة منك، قارن الأسعار والتقييمات، وأكّد حجزك أونلاين بضغطة واحدة.
+            {heroSubtitle}
           </p>
 
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>

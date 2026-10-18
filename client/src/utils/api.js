@@ -163,3 +163,48 @@ export async function loginUser(phone, role) {
     body: JSON.stringify({ phone, role })
   });
 }
+
+// --- SETTINGS (TITLE, SLOGAN, LOGO, METADATA) ---
+export async function fetchSettings() {
+  return await safeFetch(`${API_BASE}/settings`);
+}
+
+export async function updateSettings(settingsData) {
+  return await safeFetch(`${API_BASE}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(settingsData)
+  });
+}
+
+// --- ADMIN AUTH & USERS MANAGEMENT ---
+export async function adminLogin(username, password) {
+  return await safeFetch(`${API_BASE}/auth/admin-login`, {
+    method: 'POST',
+    body: JSON.stringify({ username, password })
+  });
+}
+
+export async function fetchAdminUsers() {
+  return await safeFetch(`${API_BASE}/admin-users`);
+}
+
+export async function createAdminUser(userData) {
+  return await safeFetch(`${API_BASE}/admin-users`, {
+    method: 'POST',
+    body: JSON.stringify(userData)
+  });
+}
+
+export async function updateAdminUser(id, userData) {
+  return await safeFetch(`${API_BASE}/admin-users/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(userData)
+  });
+}
+
+export async function deleteAdminUser(id) {
+  return await safeFetch(`${API_BASE}/admin-users/${id}`, {
+    method: 'DELETE'
+  });
+}
+
